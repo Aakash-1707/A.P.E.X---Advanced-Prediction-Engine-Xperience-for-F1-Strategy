@@ -346,7 +346,7 @@ export interface OpenF1Session {
 }
 
 // Wraps fetch with an AbortController timeout so requests never hang indefinitely.
-async function fetchT(url: string, timeoutMs = 9000): Promise<Response> {
+export async function fetchT(url: string, timeoutMs = 9000): Promise<Response> {
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
