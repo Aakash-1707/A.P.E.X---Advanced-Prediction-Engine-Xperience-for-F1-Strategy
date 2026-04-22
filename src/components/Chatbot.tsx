@@ -1,47 +1,45 @@
 import { MessageSquare, X, Send, Sparkles } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
-type Message = { role: 'user' | 'bot'; content: string };
+import { askNiki, ChatMessage } from '../lib/niki';
 
-const SEED: Message[] = [
-  { role: 'bot', content: 'Hi, I\'m A.P.E.X Assistant. Ask me about telemetry, strategy, or race predictions.' },
+const SEED: ChatMessage[] = [
+  { role: 'model', parts: [{ text: 'Hi, I\'m N.I.K.I (Natural Interface for Knowledge & Information). Ask me about telemetry, strategy, or race predictions.' }] },
 ];
-
-const CANNED: Record<string, string> = {
-  default: 'I\'m analyzing session data. Try asking about tyre strategy, qualifying pace, or race predictions.',
-  tyre: 'Based on current degradation models, a medium-hard strategy offers the lowest expected time loss at ~22.4s across a full race distance.',
-  strategy: 'Optimal pit window: lap 18-22 for a one-stop. Undercut risk is high if VER pits on lap 17.',
-  qualifying: 'Current model gives VER 32% pole probability, followed by NOR at 28%. Track evolution favors later runs.',
-  race: 'Race win probabilities lean McLaren-heavy this round: NOR 34%, VER 30%, PIA 16%.',
-};
-
-function respond(input: string): string {
-  const q = input.toLowerCase();
-  if (q.includes('tyre') || q.includes('tire')) return CANNED.tyre;
-  if (q.includes('strategy') || q.includes('pit')) return CANNED.strategy;
-  if (q.includes('quali')) return CANNED.qualifying;
-  if (q.includes('race') || q.includes('predict')) return CANNED.race;
-  return CANNED.default;
-}
 
 export default function Chatbot() {
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>(SEED);
+  const [messages, setMessages] = useState<ChatMessage[]>(SEED);
   const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [status, setStatus] = useState<string>('Online · Live data');
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, open]);
+  }, [messages, open, status]);
 
-  const send = () => {
+  const send = async () => {
     const trimmed = input.trim();
-    if (!trimmed) return;
-    setMessages((m) => [...m, { role: 'user', content: trimmed }]);
+    if (!trimmed || isLoading) return;
+    
+    const newUserMsg: ChatMessage = { role: 'user', parts: [{ text: trimmed }] };
+    setMessages((m) => [...m, newUserMsg]);
     setInput('');
-    setTimeout(() => {
-      setMessages((m) => [...m, { role: 'bot', content: respond(trimmed) }]);
-    }, 500);
+    setIsLoading(true);
+    setStatus("N.I.K.I is typing...");
+
+    try {
+      // Pass all previous messages except the seed message (or include the seed, up to you)
+      // Including the seed is fine, it establishes personality in context.
+      const responseText = await askNiki(messages, trimmed, (s) => setStatus(s));
+      setMessages((m) => [...m, { role: 'model', parts: [{ text: responseText }] }]);
+    } catch (err) {
+      setMessages((m) => [...m, { role: 'model', parts: [{ text: 'Connection failed. Check your API key.' }] }]);
+    } finally {
+      setIsLoading(false);
+      setStatus("Online · Live data");
+    }
   };
 
   return (
@@ -60,13 +58,13 @@ export default function Chatbot() {
         }`}
       >
         <div className="glass h-full rounded-2xl bg-white/80 dark:bg-neutral-950/80 border border-black/5 dark:border-white/10 shadow-glow flex flex-col overflow-hidden transition-theme">
-          <div className="px-4 py-3 border-b border-black/5 dark:border-white/5 flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-neutral-900 dark:bg-white flex items-center justify-center">
-              <Sparkles className="w-3.5 h-3.5 text-white dark:text-black" />
+          <div className="px-4 py-3 border-b border-black/5 dark:border-white/5 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-neutral-900 dark:bg-white flex items-center justify-center overflow-hidden shrink-0">
+              <img src="/niki.jpg" alt="NIKI" className="w-full h-full object-cover" />
             </div>
             <div>
-              <div className="text-sm font-semibold text-neutral-900 dark:text-white">A.P.E.X Assistant</div>
-              <div className="text-[10px] text-neutral-500 dark:text-neutral-400">Online · Live data</div>
+              <div className="text-sm font-semibold text-neutral-900 dark:text-white">N.I.K.I</div>
+              <div className="text-[10px] text-neutral-500 dark:text-neutral-400">{status}</div>
             </div>
           </div>
 
@@ -83,10 +81,17 @@ export default function Chatbot() {
                       : 'bg-neutral-100 text-neutral-800 dark:bg-white/5 dark:text-neutral-200'
                   }`}
                 >
-                  {m.content}
+                  {m.parts[0].text}
                 </div>
               </div>
             ))}
+            {isLoading && (
+               <div className="flex justify-start">
+                  <div className="bg-neutral-100 text-neutral-800 dark:bg-white/5 dark:text-neutral-200 rounded-2xl px-3.5 py-2 text-sm italic">
+                    typing...
+                  </div>
+               </div>
+            )}
           </div>
 
           <div className="p-3 border-t border-black/5 dark:border-white/5">
