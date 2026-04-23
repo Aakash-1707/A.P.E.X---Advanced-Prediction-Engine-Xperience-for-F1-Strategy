@@ -4,37 +4,11 @@ import { drivers } from '../data/mock';
 import { Activity, Gauge, Zap, TrendingUp, Play, Pause, Map as MapIcon } from 'lucide-react';
 import { fetchCalendar, fetchAllDrivers, fetchOpenF1Sessions } from '../api/f1';
 import { fetchTelemetryFromDB } from '../api/supabase-telemetry';
+import { getFlagUrl } from '../lib/flags';
 
 type Props = { activeEvent?: number | null };
 
 const SPRINT_ROUNDS = [2, 6, 11, 19, 21, 23];
-
-const COUNTRY_FLAGS: Record<string, string> = {
-  'Australia': 'au',
-  'China': 'cn',
-  'Japan': 'jp',
-  'Bahrain': 'bh',
-  'Saudi Arabia': 'sa',
-  'USA': 'us',
-  'United States': 'us',
-  'Italy': 'it',
-  'Monaco': 'mc',
-  'Spain': 'es',
-  'Canada': 'ca',
-  'Austria': 'at',
-  'UK': 'gb',
-  'United Kingdom': 'gb',
-  'Hungary': 'hu',
-  'Belgium': 'be',
-  'Netherlands': 'nl',
-  'Azerbaijan': 'az',
-  'Singapore': 'sg',
-  'Mexico': 'mx',
-  'Brazil': 'br',
-  'Qatar': 'qa',
-  'Abu Dhabi': 'ae',
-  'UAE': 'ae',
-};
 
 // Cache bounding boxes per grand prix so the track doesn't jump around when switching sessions or drivers
 const trackBoundsCache = new Map<string, { minX: number, maxX: number, minY: number, maxY: number }>();
@@ -528,8 +502,7 @@ export default function Telemetry({ activeEvent }: Props) {
             <div className="text-xs text-neutral-400 animate-pulse">Loading calendar...</div>
           ) : races.filter(r => r.status !== 'cancelled').map(r => {
             const isSelected = selectedRound === r.round;
-            const flagCode = COUNTRY_FLAGS[r.country];
-            const flagUrl = flagCode ? `https://flagcdn.com/w320/${flagCode}.png` : null;
+            const flagUrl = getFlagUrl(r);
             return (
               <button
                 key={r.round}

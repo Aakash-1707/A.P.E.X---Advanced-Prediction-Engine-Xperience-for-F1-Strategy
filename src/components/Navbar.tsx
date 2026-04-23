@@ -27,20 +27,16 @@ export default function Navbar({ active, onChange }: Props) {
             onClick={() => onChange('home')}
             className="flex items-center gap-3 group"
           >
-            <div className="relative w-9 h-9 rounded-xl border border-neutral-300/70 dark:border-white/20 bg-white/80 dark:bg-neutral-900/70 shadow-sm overflow-hidden">
-              <div className="absolute inset-0 bg-gradient-to-br from-orange-500/15 via-transparent to-blue-500/20" />
-              <div className="absolute left-[9px] top-[8px] w-[2.5px] h-[20px] bg-neutral-900 dark:bg-white rounded-full rotate-[14deg]" />
-              <div className="absolute left-[16px] top-[8px] w-[2.5px] h-[20px] bg-neutral-900 dark:bg-white rounded-full rotate-[14deg]" />
-              <div className="absolute right-[7px] top-[9px] w-[2.5px] h-[18px] bg-neutral-900 dark:bg-white rounded-full -rotate-[18deg]" />
-              <div className="absolute right-[12px] top-[9px] w-[2.5px] h-[18px] bg-neutral-900 dark:bg-white rounded-full rotate-[18deg]" />
+            <div className="w-10 h-10 rounded-xl overflow-hidden border border-black/10 dark:border-white/15 bg-black">
+              <img
+                src="/apex-logo.png"
+                alt="A.P.E.X logo"
+                className="w-full h-full object-cover"
+              />
             </div>
             <div className="flex flex-col items-start leading-none">
-              <span className="font-semibold tracking-[0.22em] text-[12px] text-neutral-900 dark:text-white">
-                A.P.E.X
-              </span>
-              <span className="text-[9px] uppercase tracking-[0.22em] text-neutral-500 dark:text-neutral-400 mt-1">
-                Race Intelligence
-              </span>
+              <span className="font-semibold tracking-[0.22em] text-[12px] text-neutral-900 dark:text-white">A.P.E.X</span>
+              <span className="text-[9px] uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400 mt-1">Race Intelligence</span>
             </div>
           </button>
 

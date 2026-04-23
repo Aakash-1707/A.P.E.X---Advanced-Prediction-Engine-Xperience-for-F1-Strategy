@@ -4,25 +4,12 @@ import Card from '../components/Card';
 import { Race } from '../data/mock';
 import { fetchCalendar } from '../api/f1';
 import { fetchRaceWeather, WeatherData } from '../api/weather';
+import { getFlagUrl } from '../lib/flags';
 import {
   fetchPredictionsForRace,
   PredictionItem,
   resolvePredictorGpName,
 } from '../api/predictions';
-
-const COUNTRY_FLAGS: Record<string, string> = {
-  'Australia': 'au', 'China': 'cn', 'Japan': 'jp', 'Bahrain': 'bh', 'Saudi Arabia': 'sa',
-  'USA': 'us', 'United States': 'us', 'Italy': 'it', 'Monaco': 'mc', 'Spain': 'es',
-  'Canada': 'ca', 'Austria': 'at', 'UK': 'gb', 'United Kingdom': 'gb', 'Hungary': 'hu',
-  'Belgium': 'be', 'Netherlands': 'nl', 'Azerbaijan': 'az', 'Singapore': 'sg',
-  'Mexico': 'mx', 'Brazil': 'br', 'Qatar': 'qa', 'Abu Dhabi': 'ae', 'UAE': 'ae', 'United Arab Emirates': 'ae',
-};
-
-function getFlagCode(race: Race): string | null {
-  // OpenF1 can return Abu Dhabi as either country alias or by event name only.
-  if (/abu\s*dhabi/i.test(race.name) || /abu\s*dhabi/i.test(race.location)) return 'ae';
-  return COUNTRY_FLAGS[race.country] ?? null;
-}
 
 function PredictionList({
   title,
@@ -299,8 +286,7 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
             ) : (
               races.filter(r => r.status !== 'cancelled').map(r => {
                 const isSelected = selectedRound === r.round;
-                const flagCode = getFlagCode(r);
-                const flagUrl = flagCode ? `https://flagcdn.com/w320/${flagCode}.png` : null;
+                const flagUrl = getFlagUrl(r);
                 return (
                   <button
                     key={r.round}

@@ -2,16 +2,9 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { Circle } from 'lucide-react';
 import { fetchCalendar, fetchOpenF1Sessions } from '../api/f1';
 import { analyseTyreData, TyreAnalysisResult, COMPOUND_COLORS } from '../api/tyre-analysis';
+import { getFlagUrl } from '../lib/flags';
 
 type Props = { activeEvent?: number | null };
-
-const COUNTRY_FLAGS: Record<string, string> = {
-  'Australia':'au','China':'cn','Japan':'jp','Bahrain':'bh','Saudi Arabia':'sa',
-  'USA':'us','United States':'us','Italy':'it','Monaco':'mc','Spain':'es',
-  'Canada':'ca','Austria':'at','UK':'gb','United Kingdom':'gb','Hungary':'hu',
-  'Belgium':'be','Netherlands':'nl','Azerbaijan':'az','Singapore':'sg',
-  'Mexico':'mx','Brazil':'br','Qatar':'qa','Abu Dhabi':'ae','UAE':'ae',
-};
 
 const COMPOUND_LABELS: Record<string, string> = { SOFT: 'Soft', MEDIUM: 'Medium', HARD: 'Hard', INTERMEDIATE: 'Inter', WET: 'Wet' };
 const COMPOUND_ORDER = ['SOFT', 'MEDIUM', 'HARD'];
@@ -163,8 +156,7 @@ export default function Tyre({ activeEvent }: Props) {
               <div className="text-xs text-neutral-400 animate-pulse">Loading calendar...</div>
             ) : races.filter(r => r.status !== 'cancelled').map(r => {
               const isSelected = selectedRound === r.round;
-              const flagCode = COUNTRY_FLAGS[r.country];
-              const flagUrl = flagCode ? `https://flagcdn.com/w320/${flagCode}.png` : null;
+              const flagUrl = getFlagUrl(r);
               return (
                 <button key={r.round} onClick={() => { setSelectedRound(r.round); setAnalysis(null); }}
                   className={`flex-shrink-0 flex flex-col items-start gap-2 px-4 py-4 rounded-2xl border transition-all duration-200 min-w-[calc(25%-6px)] min-h-[140px] relative overflow-hidden ${isSelected ? 'border-neutral-900 dark:border-white shadow-lg scale-105' : 'border-black/10 dark:border-white/10 hover:border-neutral-400 dark:hover:border-white/30'}`}>
