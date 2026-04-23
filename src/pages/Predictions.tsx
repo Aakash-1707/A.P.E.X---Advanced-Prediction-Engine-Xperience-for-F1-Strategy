@@ -18,6 +18,12 @@ const COUNTRY_FLAGS: Record<string, string> = {
   'Mexico': 'mx', 'Brazil': 'br', 'Qatar': 'qa', 'Abu Dhabi': 'ae', 'UAE': 'ae', 'United Arab Emirates': 'ae',
 };
 
+function getFlagCode(race: Race): string | null {
+  // OpenF1 can return Abu Dhabi as either country alias or by event name only.
+  if (/abu\s*dhabi/i.test(race.name) || /abu\s*dhabi/i.test(race.location)) return 'ae';
+  return COUNTRY_FLAGS[race.country] ?? null;
+}
+
 function PredictionList({
   title,
   items,
@@ -293,7 +299,7 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
             ) : (
               races.filter(r => r.status !== 'cancelled').map(r => {
                 const isSelected = selectedRound === r.round;
-                const flagCode = COUNTRY_FLAGS[r.country];
+                const flagCode = getFlagCode(r);
                 const flagUrl = flagCode ? `https://flagcdn.com/w320/${flagCode}.png` : null;
                 return (
                   <button
