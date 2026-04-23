@@ -22,21 +22,21 @@ export default function Navbar({ active, onChange }: Props) {
   return (
     <header className="sticky top-0 z-40 w-full">
       <div className="glass border-b border-black/5 dark:border-white/5 bg-white/70 dark:bg-black/50 transition-theme">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           <button
             onClick={() => onChange('home')}
             className="flex items-center gap-3 group"
           >
-            <div className="w-10 h-10 rounded-xl overflow-hidden border border-black/10 dark:border-white/15 bg-black">
+            <div className="w-20 h-20 overflow-hidden">
               <img
                 src="/apex-logo.png"
                 alt="A.P.E.X logo"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain"
               />
             </div>
             <div className="flex flex-col items-start leading-none">
-              <span className="font-semibold tracking-[0.22em] text-[12px] text-neutral-900 dark:text-white">A.P.E.X</span>
-              <span className="text-[9px] uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400 mt-1">Race Intelligence</span>
+              <span className="font-semibold tracking-[0.22em] text-[14px] text-neutral-900 dark:text-white">A.P.E.X</span>
+              <span className="text-[10px] uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400 mt-1">Race Intelligence</span>
             </div>
           </button>
 
