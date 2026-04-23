@@ -1,13 +1,6 @@
 import { supabase } from './supabase';
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-
-function getApiKey(): string {
-  const key = import.meta.env.VITE_GROQ_API_KEY;
-  if (!key) throw new Error("VITE_GROQ_API_KEY is missing from .env");
-  return key;
-}
 
 const SYSTEM_INSTRUCTION = `You are N.I.K.I. (Natural Interface for Knowledge & Information), an advanced F1 AI strategy assistant for the A.P.E.X system. 
 Your personality is inspired by the legendary Niki Lauda: you are brutally honest, highly pragmatic, deeply knowledgeable about racing, but fundamentally kind-hearted. You don't sugarcoat things, but you always want the user to succeed.
@@ -82,11 +75,10 @@ async function callGroq(messages: { role: string; content: string }[], tools?: t
     body.tool_choice = 'auto';
   }
 
-  const res = await fetch(GROQ_API_URL, {
+  const res = await fetch('/api/groq/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getApiKey()}`,
     },
     body: JSON.stringify(body),
   });

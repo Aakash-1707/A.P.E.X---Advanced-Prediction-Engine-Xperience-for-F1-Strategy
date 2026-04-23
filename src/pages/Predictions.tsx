@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Thermometer, CloudRain, Flame, RefreshCw, AlertTriangle, Cpu } from 'lucide-react';
+import { Thermometer, CloudRain, Flame, Database } from 'lucide-react';
 import Card from '../components/Card';
 import { Race } from '../data/mock';
 import { fetchCalendar } from '../api/f1';
 import { fetchRaceWeather, WeatherData } from '../api/weather';
 import {
-  predictForRace,
+  fetchPredictionsForRace,
   PredictionItem,
-  JobProgress,
   resolvePredictorGpName,
 } from '../api/predictions';
 
@@ -16,14 +15,8 @@ const COUNTRY_FLAGS: Record<string, string> = {
   'USA': 'us', 'United States': 'us', 'Italy': 'it', 'Monaco': 'mc', 'Spain': 'es',
   'Canada': 'ca', 'Austria': 'at', 'UK': 'gb', 'United Kingdom': 'gb', 'Hungary': 'hu',
   'Belgium': 'be', 'Netherlands': 'nl', 'Azerbaijan': 'az', 'Singapore': 'sg',
-  'Mexico': 'mx', 'Brazil': 'br', 'Qatar': 'qa', 'Abu Dhabi': 'ae', 'UAE': 'ae',
+  'Mexico': 'mx', 'Brazil': 'br', 'Qatar': 'qa', 'Abu Dhabi': 'ae', 'UAE': 'ae', 'United Arab Emirates': 'ae',
 };
-
-type PredictionPhase =
-  | { kind: 'idle' }
-  | { kind: 'running'; progress: JobProgress; cached: boolean; startedAt: number }
-  | { kind: 'done'; cached: boolean; elapsedMs: number }
-  | { kind: 'error'; message: string };
 
 function PredictionList({
   title,
@@ -168,100 +161,6 @@ function sourceLabel(w: WeatherData | null): string {
   return '';
 }
 
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.floor((ms % 60_000) / 1000);
-  return `${m}m ${s}s`;
-}
-
-function PredictionStatusBanner({
-  phase,
-  gpLabel,
-  onRetry,
-}: {
-  phase: PredictionPhase;
-  gpLabel: string;
-  onRetry: () => void;
-}) {
-  if (phase.kind === 'idle') return null;
-
-  if (phase.kind === 'running') {
-    const pct = Math.max(1, phase.progress.percent);
-    return (
-      <Card className="p-4 relative overflow-hidden">
-        <div
-          aria-hidden
-          className="absolute inset-y-0 left-0 bg-gradient-to-r from-sky-500/10 via-sky-500/5 to-transparent transition-all duration-500"
-          style={{ width: `${pct}%` }}
-        />
-        <div className="relative flex items-center gap-4">
-          <span className="flex items-center justify-center w-9 h-9 rounded-lg bg-sky-500/15 text-sky-500">
-            <Cpu size={16} className="animate-pulse" />
-          </span>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-white truncate">
-              <span>Predicting {gpLabel}</span>
-              {phase.cached && (
-                <span className="text-[10px] uppercase tracking-widest text-emerald-500">cached</span>
-              )}
-            </div>
-            <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5 truncate">
-              {phase.progress.message || 'Running APEX V7 pipeline…'}
-            </div>
-          </div>
-          <div className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400 shrink-0">
-            {pct}%
-          </div>
-        </div>
-        <div className="relative mt-3 h-1 rounded-full bg-neutral-100 dark:bg-white/5 overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-sky-400 to-sky-600 transition-all duration-500"
-            style={{ width: `${pct}%`, boxShadow: '0 0 12px #38bdf866' }}
-          />
-        </div>
-      </Card>
-    );
-  }
-
-  if (phase.kind === 'done') {
-    return (
-      <Card className="p-4">
-        <div className="flex items-center gap-3">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b98188]" />
-          <div className="text-xs text-neutral-500 dark:text-neutral-400">
-            {phase.cached ? 'Loaded cached prediction' : `Computed in ${formatElapsed(phase.elapsedMs)}`}
-            <span className="mx-2">·</span>
-            APEX V7 · XGBoost + FastF1
-          </div>
-        </div>
-      </Card>
-    );
-  }
-
-  // error
-  return (
-    <Card className="p-4 border-red-500/30">
-      <div className="flex items-center gap-3">
-        <span className="flex items-center justify-center w-9 h-9 rounded-lg bg-red-500/15 text-red-500">
-          <AlertTriangle size={16} />
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-neutral-900 dark:text-white">Prediction failed</div>
-          <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5 break-all">{phase.message}</div>
-        </div>
-        <button
-          onClick={onRetry}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-900 dark:bg-white text-white dark:text-black text-xs font-medium hover:scale-[1.02] transition-transform"
-        >
-          <RefreshCw size={12} /> Retry
-        </button>
-      </div>
-    </Card>
-  );
-}
-
 export default function Predictions({ activeEvent }: { activeEvent?: number | null }) {
   const [races, setRaces] = useState<Race[]>([]);
   const [selectedRound, setSelectedRound] = useState<number | null>(activeEvent ?? null);
@@ -269,8 +168,8 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [racePreds, setRacePreds] = useState<PredictionItem[]>([]);
   const [qualiPreds, setQualiPreds] = useState<PredictionItem[]>([]);
-  const [predictionPhase, setPredictionPhase] = useState<PredictionPhase>({ kind: 'idle' });
-  const [retryNonce, setRetryNonce] = useState(0);
+  const [predictionsLoading, setPredictionsLoading] = useState(false);
+  const [predictionsError, setPredictionsError] = useState<string | null>(null);
   const [requestedRound, setRequestedRound] = useState<number | null>(null);
   const gpScrollRef = useRef<HTMLDivElement>(null);
 
@@ -318,56 +217,36 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
     if (!requestedRace) {
       setRacePreds([]);
       setQualiPreds([]);
-      setPredictionPhase({ kind: 'idle' });
+      setPredictionsError(null);
+      setPredictionsLoading(false);
       return;
     }
 
-    const controller = new AbortController();
-    const startedAt = Date.now();
-
+    let cancelled = false;
     setRacePreds([]);
     setQualiPreds([]);
-    setPredictionPhase({
-      kind: 'running',
-      progress: { percent: 1, message: 'Submitting job…' },
-      cached: false,
-      startedAt,
-    });
+    setPredictionsError(null);
+    setPredictionsLoading(true);
 
-    predictForRace(requestedRace, {
-      signal: controller.signal,
-      force: retryNonce > 0 && retryNonce !== Infinity,
-      onProgress: (p) => {
-        setPredictionPhase(prev => {
-          if (prev.kind !== 'running') return prev;
-          return {
-            kind: 'running',
-            progress: { percent: p.percent, message: p.message },
-            cached: p.cached,
-            startedAt: prev.startedAt,
-          };
-        });
-      },
-    })
+    fetchPredictionsForRace(requestedRace)
       .then(({ raceItems, qualiItems }) => {
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
         setRacePreds(raceItems);
         setQualiPreds(qualiItems);
-        setPredictionPhase(prev => ({
-          kind: 'done',
-          cached: prev.kind === 'running' ? prev.cached : false,
-          elapsedMs: Date.now() - startedAt,
-        }));
       })
       .catch(err => {
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
         const message = err instanceof Error ? err.message : String(err);
-        if (message === 'Aborted') return;
-        setPredictionPhase({ kind: 'error', message });
+        setPredictionsError(message);
+      })
+      .finally(() => {
+        if (!cancelled) setPredictionsLoading(false);
       });
 
-    return () => controller.abort();
-  }, [requestedRace?.round, requestedRace?.country, requestedRace?.name, retryNonce]);
+    return () => {
+      cancelled = true;
+    };
+  }, [requestedRace?.round, requestedRace?.country, requestedRace?.name]);
 
   const predictorGpLabel = requestedRace
     ? resolvePredictorGpName(requestedRace)
@@ -508,39 +387,35 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
         </div>
       </div>
 
-      {/* Prediction status banner */}
-      {predictionPhase.kind === 'idle' && currentRace ? (
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center justify-center w-9 h-9 rounded-lg bg-neutral-100 dark:bg-white/5 text-neutral-500">
-              <Cpu size={16} />
-            </span>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-neutral-900 dark:text-white">
-                Ready to predict
-              </div>
-              <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
-                Click a Grand Prix in the picker above to run the APEX V7 model.
-              </div>
+      {/* Prediction source banner */}
+      <Card className={`p-4 ${predictionsError ? 'border-red-500/30' : ''}`}>
+        <div className="flex items-center gap-3">
+          <span className="flex items-center justify-center w-9 h-9 rounded-lg bg-neutral-100 dark:bg-white/5 text-neutral-500">
+            <Database size={16} />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-neutral-900 dark:text-white">
+              {requestedRace ? `Supabase predictions · ${predictorGpLabel}` : 'Ready to load predictions'}
+            </div>
+            <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5 break-all">
+              {predictionsError
+                ? predictionsError
+                : requestedRace
+                  ? 'Reading pre-computed APEX V7 outputs from race_predictions and quali_predictions.'
+                  : 'Click a Grand Prix in the picker above to load saved predictions.'}
             </div>
           </div>
-        </Card>
-      ) : (
-        <PredictionStatusBanner
-          phase={predictionPhase}
-          gpLabel={predictorGpLabel}
-          onRetry={() => setRetryNonce(n => n + 1)}
-        />
-      )}
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <PredictionList
           title="Qualifying"
           subtitle="Pole probability · APEX V7 XGBoost"
           items={qualiPreds}
-          loading={predictionPhase.kind === 'running'}
+          loading={predictionsLoading}
           empty={
-            predictionPhase.kind === 'idle'
+            !requestedRace
               ? 'Click a Grand Prix above to start'
               : currentRace
                 ? `No qualifying prediction yet for ${currentRace.name}.`
@@ -552,9 +427,9 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
           title="Race"
           subtitle="Win probability · APEX V7 XGBoost"
           items={racePreds}
-          loading={predictionPhase.kind === 'running'}
+          loading={predictionsLoading}
           empty={
-            predictionPhase.kind === 'idle'
+            !requestedRace
               ? 'Click a Grand Prix above to start'
               : currentRace
                 ? `No race prediction yet for ${currentRace.name}.`

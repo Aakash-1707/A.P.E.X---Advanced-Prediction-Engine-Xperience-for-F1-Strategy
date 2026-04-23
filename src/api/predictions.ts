@@ -1,75 +1,33 @@
-// F1 2026 predictor API client.
-//
-// The predictor runs as a FastAPI server (see ml_pipeline/api.py).
-// We submit a job, then poll until done.
-//
-//   const { race, quali } = await runPrediction(
-//     gpName,
-//     { onProgress: ({ percent, message }) => setProgress({ percent, message }) }
-//   );
-//
-
+// F1 2026 predictions client (Supabase-backed).
 import { Race, teamColors } from '../data/mock';
+import { supabase } from '../lib/supabase';
 
-const API_URL =
-  import.meta.env.VITE_PREDICTION_API_URL ?? 'http://localhost:8000';
-
-// ── Types that mirror the FastAPI response ───────────────────────────
 export interface RacePredictionRow {
-  Abbreviation: string;
-  FullName: string;
-  DriverNumber: string;
-  TeamName: string;
-  GridPosition: number;
-  ChampPoints: number;
-  'Win_%': number;
-  'Podium_%': number;
-  'Top10_%': number;
-  ExpectedFinish: number;
-  DriverELO: number;
+  gp_name: string;
+  driver_abbr: string;
+  driver_name: string | null;
+  driver_number: string | null;
+  team_name: string | null;
+  grid_position: number | null;
+  win_pct: number | null;
+  podium_pct: number | null;
+  top10_pct: number | null;
+  expected_finish: number | null;
+  predicted_rank: number | null;
+  created_at: string | null;
 }
 
 export interface QualiPredictionRow {
-  Abbreviation: string;
-  FullName: string;
-  DriverNumber: string;
-  TeamName: string;
-  ExpectedGrid: number;
-  'Pole_%': number;
-  'Q3_%': number;
-}
-
-export interface PredictionResult {
-  gp: string;
-  circuit: { laps: number; overtake_index: number };
-  race: RacePredictionRow[];
-  quali: QualiPredictionRow[];
-  computed_at: number;
-}
-
-export interface JobProgress {
-  percent: number;
-  message: string;
-}
-
-export type JobStatus = 'queued' | 'running' | 'done' | 'error';
-
-interface JobStatusResponse {
-  job_id: string;
-  status: JobStatus;
-  gp: string;
-  progress: JobProgress;
-  result: PredictionResult | null;
-  error: string | null;
-  started_at: number | null;
-  finished_at: number | null;
-}
-
-interface SubmitResponse {
-  job_id: string;
-  status: JobStatus;
-  gp: string;
-  cached: boolean;
+  gp_name: string;
+  driver_abbr: string;
+  driver_name: string | null;
+  driver_number: string | null;
+  team_name: string | null;
+  expected_grid: number | null;
+  pole_pct: number | null;
+  q3_pct: number | null;
+  predicted_grid: number | null;
+  created_at: string | null;
 }
 
 // ── UI-friendly shape used by the PredictionList component ───────────
@@ -118,18 +76,18 @@ export function racePredictionsToItems(
   limit = 10,
 ): PredictionItem[] {
   return [...rows]
-    .sort((a, b) => a.ExpectedFinish - b.ExpectedFinish)
+    .sort((a, b) => (a.predicted_rank ?? 999) - (b.predicted_rank ?? 999))
     .slice(0, limit)
     .map(r => ({
-      driver: r.Abbreviation,
-      name: r.FullName ?? r.Abbreviation,
-      team: r.TeamName,
-      prob: r['Win_%'],
-      color: resolveTeamColor(r.TeamName),
-      gridPosition: r.GridPosition,
-      expectedFinish: r.ExpectedFinish,
-      podiumPct: r['Podium_%'],
-      top10Pct: r['Top10_%'],
+      driver: r.driver_abbr,
+      name: r.driver_name ?? r.driver_abbr,
+      team: r.team_name ?? 'Unknown',
+      prob: r.win_pct ?? 0,
+      color: resolveTeamColor(r.team_name),
+      gridPosition: r.grid_position ?? undefined,
+      expectedFinish: r.expected_finish ?? undefined,
+      podiumPct: r.podium_pct ?? undefined,
+      top10Pct: r.top10_pct ?? undefined,
     }));
 }
 
@@ -138,16 +96,16 @@ export function qualiPredictionsToItems(
   limit = 10,
 ): PredictionItem[] {
   return [...rows]
-    .sort((a, b) => a.ExpectedGrid - b.ExpectedGrid)
+    .sort((a, b) => (a.predicted_grid ?? 999) - (b.predicted_grid ?? 999))
     .slice(0, limit)
     .map(r => ({
-      driver: r.Abbreviation,
-      name: r.FullName ?? r.Abbreviation,
-      team: r.TeamName,
-      prob: r['Pole_%'],
-      color: resolveTeamColor(r.TeamName),
-      poleHint: r['Pole_%'],
-      q3Hint: r['Q3_%'],
+      driver: r.driver_abbr,
+      name: r.driver_name ?? r.driver_abbr,
+      team: r.team_name ?? 'Unknown',
+      prob: r.pole_pct ?? 0,
+      color: resolveTeamColor(r.team_name),
+      poleHint: r.pole_pct ?? undefined,
+      q3Hint: r.q3_pct ?? undefined,
     }));
 }
 
@@ -204,96 +162,38 @@ export function resolvePredictorGpName(race: Race): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  HTTP helpers
+//  Supabase reads
 // ─────────────────────────────────────────────────────────────────────
-async function postPredict(gp: string, force = false): Promise<SubmitResponse> {
-  const res = await fetch(`${API_URL}/predict`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ gp, force }),
-  });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => res.statusText);
-    throw new Error(`POST /predict → ${res.status}: ${msg}`);
-  }
-  return res.json();
-}
-
-async function getJob(jobId: string): Promise<JobStatusResponse> {
-  const res = await fetch(`${API_URL}/jobs/${jobId}`);
-  if (!res.ok) {
-    const msg = await res.text().catch(() => res.statusText);
-    throw new Error(`GET /jobs/${jobId} → ${res.status}: ${msg}`);
-  }
-  return res.json();
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  MAIN ENTRY — submit + poll until done
-// ─────────────────────────────────────────────────────────────────────
-export interface RunPredictionOptions {
-  force?: boolean;
-  pollMs?: number;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  onProgress?: (p: JobProgress & { cached: boolean }) => void;
-}
-
-export async function runPrediction(
-  gpName: string,
-  opts: RunPredictionOptions = {},
-): Promise<PredictionResult> {
-  const { force = false, pollMs = 1500, timeoutMs = 20 * 60 * 1000, onProgress, signal } = opts;
-
-  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-  const submit = await postPredict(gpName, force);
-
-  if (submit.cached && submit.status === 'done') {
-    const snap = await getJob(submit.job_id);
-    if (snap.result) {
-      onProgress?.({ percent: 100, message: 'Cached', cached: true });
-      return snap.result;
-    }
-  }
-
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (Date.now() > deadline) {
-      throw new Error(`Prediction timeout after ${Math.round(timeoutMs / 1000)}s`);
-    }
-
-    const snap = await getJob(submit.job_id);
-    onProgress?.({ ...snap.progress, cached: submit.cached });
-
-    if (snap.status === 'done' && snap.result) return snap.result;
-    if (snap.status === 'error') {
-      throw new Error(snap.error ?? 'Prediction failed');
-    }
-
-    await new Promise((r) => setTimeout(r, pollMs));
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  Utility: wrapper that takes a Race (not a string) and returns UI items
-// ─────────────────────────────────────────────────────────────────────
-export async function predictForRace(
+export async function fetchPredictionsForRace(
   race: Race,
-  opts: RunPredictionOptions = {},
 ): Promise<{
-  raw: PredictionResult;
   raceItems: PredictionItem[];
   qualiItems: PredictionItem[];
   predictorGp: string;
 }> {
   const predictorGp = resolvePredictorGpName(race);
-  const raw = await runPrediction(predictorGp, opts);
+  const [raceRes, qualiRes] = await Promise.all([
+    supabase
+      .from('race_predictions')
+      .select('*')
+      .eq('gp_name', predictorGp)
+      .order('predicted_rank', { ascending: true }),
+    supabase
+      .from('quali_predictions')
+      .select('*')
+      .eq('gp_name', predictorGp)
+      .order('predicted_grid', { ascending: true }),
+  ]);
+
+  if (raceRes.error) throw new Error(`Race predictions fetch failed: ${raceRes.error.message}`);
+  if (qualiRes.error) throw new Error(`Qualifying predictions fetch failed: ${qualiRes.error.message}`);
+
+  const raceRows = (raceRes.data ?? []) as RacePredictionRow[];
+  const qualiRows = (qualiRes.data ?? []) as QualiPredictionRow[];
+
   return {
-    raw,
     predictorGp,
-    raceItems:  racePredictionsToItems(raw.race),
-    qualiItems: qualiPredictionsToItems(raw.quali),
+    raceItems: racePredictionsToItems(raceRows),
+    qualiItems: qualiPredictionsToItems(qualiRows),
   };
 }

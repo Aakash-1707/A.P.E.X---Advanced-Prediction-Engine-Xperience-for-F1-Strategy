@@ -1,0 +1,17 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/groq/chat"
+  to = "/.netlify/functions/groq-chat"
+  status = 200
+
+[[redirects]]
+  from = "/api/gemini/generate"
+  to = "/.netlify/functions/gemini-generate"
+  status = 200
