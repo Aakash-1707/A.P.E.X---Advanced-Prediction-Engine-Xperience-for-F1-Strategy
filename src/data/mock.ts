@@ -75,6 +75,7 @@ export type Race = {
   time: string;
   status: 'completed' | 'upcoming' | 'live' | 'cancelled';
   meeting_key?: number;
+  date_iso?: string;
 };
 
 export const races: Race[] = [

@@ -136,6 +136,7 @@ export async function fetchCalendar(): Promise<Race[]> {
           time: raceDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
           status,
           meeting_key: m.meeting_key,
+          date_iso: raceDate.toISOString(),
         };
       });
     }
