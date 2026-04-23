@@ -2,7 +2,7 @@ import { Moon, Sun, Menu, X } from 'lucide-react';
 import { useState } from 'react';
 import { useTheme } from '../context/ThemeContext';
 
-type Tab = 'home' | 'telemetry' | 'tyre' | 'predictions' | 'strategy' | 'grid';
+type Tab = 'home' | 'telemetry' | 'tyre' | 'predictions' | 'strategy' | 'grid' | 'docs';
 type Props = { active: Tab; onChange: (t: Tab) => void };
 
 const tabs: { id: Tab; label: string }[] = [
@@ -12,6 +12,7 @@ const tabs: { id: Tab; label: string }[] = [
   { id: 'tyre', label: 'Tyre Analysis' },
   { id: 'predictions', label: 'Predictions' },
   { id: 'strategy', label: 'Strategy' },
+  { id: 'docs', label: 'Docs' },
 ];
 
 export default function Navbar({ active, onChange }: Props) {

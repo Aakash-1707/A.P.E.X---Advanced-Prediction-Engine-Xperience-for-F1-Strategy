@@ -8,8 +8,9 @@ import Tyre from './pages/Tyre';
 import Predictions from './pages/Predictions';
 import Strategy from './pages/Strategy';
 import Grid from './pages/Grid';
+import Documentation from './pages/Documentation';
 
-type Tab = 'home' | 'telemetry' | 'tyre' | 'predictions' | 'strategy' | 'grid';
+type Tab = 'home' | 'telemetry' | 'tyre' | 'predictions' | 'strategy' | 'grid' | 'docs';
 
 function Footer() {
   return (
@@ -40,6 +41,7 @@ function Shell() {
         {tab === 'tyre' && <Tyre activeEvent={activeEvent} />}
         {tab === 'predictions' && <Predictions activeEvent={activeEvent} />}
         {tab === 'strategy' && <Strategy activeEvent={activeEvent} />}
+        {tab === 'docs' && <Documentation />}
       </main>
       <Footer />
       <Chatbot />

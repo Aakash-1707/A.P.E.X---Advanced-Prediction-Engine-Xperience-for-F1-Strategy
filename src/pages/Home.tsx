@@ -139,7 +139,10 @@ export default function Home({ onNavigate }: Props = {}) {
               <button onClick={() => onNavigate?.('telemetry')} className="px-5 py-2.5 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-black text-sm font-medium hover:scale-[1.02] transition-transform">
                 Explore Telemetry
               </button>
-              <button className="px-5 py-2.5 rounded-full border border-black/10 dark:border-white/10 text-neutral-900 dark:text-white text-sm font-medium flex items-center gap-1 hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
+              <button
+                onClick={() => onNavigate?.('docs')}
+                className="px-5 py-2.5 rounded-full border border-black/10 dark:border-white/10 text-neutral-900 dark:text-white text-sm font-medium flex items-center gap-1 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+              >
                 Read documentation <ArrowUpRight className="w-3.5 h-3.5" />
               </button>
             </div>
