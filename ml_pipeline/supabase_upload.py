@@ -2,24 +2,26 @@
 ═══════════════════════════════════════════════════════════════════════
   F1 2026 Predictor — Supabase Upload Module
   ─────────────────────────────────────────────────────────────────
-  Handles uploading predictions AND actual results to Supabase.
-  
-  Used by:
-    - run_pipeline.py  (offline compute job)
-    - fetch_actuals.py (post-race result sync)
-  
-  Environment variables required:
-    SUPABASE_URL         — your project URL
-    SUPABASE_SERVICE_KEY — service role key (write access)
+  Maps the APEX V7 predictor output DataFrames directly into the
+  Supabase `race_predictions` and `quali_predictions` tables.
+
+  Uses upsert on (gp_name, driver_abbr) so re-runs replace stale rows
+  in place instead of growing the table forever.
+
+  Environment:
+    SUPABASE_URL          — your project URL
+    SUPABASE_SERVICE_KEY  — service role key (write access, bypasses RLS)
 ═══════════════════════════════════════════════════════════════════════
 """
+
+from __future__ import annotations
 
 import os
 import sys
 import warnings
 from datetime import datetime, timezone
+from typing import Optional
 
-import fastf1
 import pandas as pd
 
 warnings.filterwarnings("ignore")
@@ -30,239 +32,220 @@ except ImportError:
     print("ERROR: supabase-py not installed. Run: pip install supabase")
     sys.exit(1)
 
+try:
+    from f1_2026_predictor import ALL_2026_GPS_ORDERED
+except ImportError:
+    ALL_2026_GPS_ORDERED = []
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  GP → country + round metadata
+#  (mirrors the frontend's expectations so the Supabase `country` and
+#   `round` columns can be used for filtering / joins if needed)
+# ─────────────────────────────────────────────────────────────────────
+GP_COUNTRY: dict[str, str] = {
+    "Australian Grand Prix":      "Australia",
+    "Chinese Grand Prix":         "China",
+    "Japanese Grand Prix":        "Japan",
+    "Bahrain Grand Prix":         "Bahrain",
+    "Saudi Arabian Grand Prix":   "Saudi Arabia",
+    "Miami Grand Prix":           "USA",
+    "Emilia Romagna Grand Prix":  "Italy",
+    "Monaco Grand Prix":          "Monaco",
+    "Spanish Grand Prix":         "Spain",
+    "Canadian Grand Prix":        "Canada",
+    "Austrian Grand Prix":        "Austria",
+    "British Grand Prix":         "UK",
+    "Belgian Grand Prix":         "Belgium",
+    "Hungarian Grand Prix":       "Hungary",
+    "Dutch Grand Prix":           "Netherlands",
+    "Italian Grand Prix":         "Italy",
+    "Azerbaijan Grand Prix":      "Azerbaijan",
+    "Singapore Grand Prix":       "Singapore",
+    "United States Grand Prix":   "USA",
+    "Mexican Grand Prix":         "Mexico",
+    "Brazilian Grand Prix":       "Brazil",
+    "Las Vegas Grand Prix":       "USA",
+    "Qatar Grand Prix":           "Qatar",
+    "Abu Dhabi Grand Prix":       "Abu Dhabi",
+}
+
+def _gp_round(gp_name: str) -> Optional[int]:
+    if gp_name in ALL_2026_GPS_ORDERED:
+        return ALL_2026_GPS_ORDERED.index(gp_name) + 1
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────
 #  CLIENT
 # ─────────────────────────────────────────────────────────────────────
-def get_client() -> "Client":
-    url = os.environ.get("SUPABASE_URL", "")
+def get_client() -> Client:
+    # Accept either SUPABASE_URL (GitHub Actions) or VITE_SUPABASE_URL (.env
+    # shared with the Vite frontend) so you don't have to duplicate it.
+    url = (
+        os.environ.get("SUPABASE_URL")
+        or os.environ.get("VITE_SUPABASE_URL")
+        or ""
+    )
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not url or not key:
         raise EnvironmentError(
-            "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set as environment variables."
+            "Supabase credentials missing.\n"
+            "  Need:  SUPABASE_URL (or VITE_SUPABASE_URL) + SUPABASE_SERVICE_KEY\n"
+            "  Add them to ml_pipeline/.env locally, or to GitHub Secrets in CI."
         )
     return create_client(url, key)
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  HELPERS
+#  SAFE COERCION HELPERS
 # ─────────────────────────────────────────────────────────────────────
-def _safe_float(val, default=0.0):
+def _safe_float(val, default=None):
+    if val is None:
+        return default
     try:
-        v = float(val)
-        return v if v == v else default   # NaN check
+        f = float(val)
+        return f if f == f else default   # NaN check
     except (TypeError, ValueError):
         return default
 
 
-def _safe_int(val, default=0):
+def _safe_int(val, default=None):
+    if val is None:
+        return default
     try:
+        if isinstance(val, float) and val != val:
+            return default
         return int(val)
     except (TypeError, ValueError):
         return default
 
 
-def _now():
-    return datetime.now(timezone.utc).isoformat()
+def _safe_str(val, default=""):
+    if val is None:
+        return default
+    try:
+        if isinstance(val, float) and val != val:
+            return default
+    except Exception:
+        pass
+    return str(val)
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  UPSERT GP ROW  →  returns gp_id
+#  UPLOADERS
 # ─────────────────────────────────────────────────────────────────────
-def upsert_grand_prix(supabase, gp_name: str, circuit_params: dict) -> int:
-    row = {
-        "name":             gp_name,
-        "season":           2026,
-        "circuit_laps":     _safe_int(circuit_params.get("laps", 55)),
-        "overtake_index":   _safe_float(circuit_params.get("overtake_idx", 0.08)),
-        "sc_probability":   _safe_float(circuit_params.get("sc_factor", 1.0)),
-        "last_computed":    _now(),
+def _race_row(gp_name: str, rank: int, row: pd.Series) -> dict:
+    return {
+        "gp_name":         gp_name,
+        "country":         GP_COUNTRY.get(gp_name),
+        "round":           _gp_round(gp_name),
+
+        "driver_abbr":     _safe_str(row.get("Abbreviation")),
+        "driver_name":     _safe_str(row.get("FullName", row.get("Abbreviation"))),
+        "driver_number":   _safe_str(row.get("DriverNumber")),
+        "team_name":       _safe_str(row.get("TeamName")),
+
+        "grid_position":   _safe_int(row.get("GridPosition")),
+        "win_pct":         _safe_float(row.get("Win_%"), 0.0),
+        "podium_pct":      _safe_float(row.get("Podium_%"), 0.0),
+        "top10_pct":       _safe_float(row.get("Top10_%"), 0.0),
+        "expected_finish": _safe_float(row.get("ExpectedFinish")),
+        "predicted_rank":  rank,
+
+        "driver_elo":      _safe_float(row.get("DriverELO")),
+        "champ_points":    _safe_float(row.get("ChampPoints"), 0.0),
+        "model_version":   "APEX_V7",
     }
-    res = (supabase.table("grand_prix")
-           .upsert(row, on_conflict="name")
-           .execute())
-    gp_id = res.data[0]["id"]
-    print(f"  ✓  grand_prix '{gp_name}' → id={gp_id}")
-    return gp_id
 
 
-# ─────────────────────────────────────────────────────────────────────
-#  UPLOAD RACE PREDICTIONS
-# ─────────────────────────────────────────────────────────────────────
-def upload_race_predictions(supabase, gp_id: int, race_pred_df: pd.DataFrame):
+def _quali_row(gp_name: str, rank: int, row: pd.Series) -> dict:
+    return {
+        "gp_name":        gp_name,
+        "country":        GP_COUNTRY.get(gp_name),
+        "round":          _gp_round(gp_name),
+
+        "driver_abbr":    _safe_str(row.get("Abbreviation")),
+        "driver_name":    _safe_str(row.get("FullName", row.get("Abbreviation"))),
+        "driver_number":  _safe_str(row.get("DriverNumber")),
+        "team_name":      _safe_str(row.get("TeamName")),
+
+        "expected_grid":  _safe_float(row.get("ExpectedGrid")),
+        "pole_pct":       _safe_float(row.get("Pole_%"), 0.0),
+        "q3_pct":         _safe_float(row.get("Q3_%"), 0.0),
+        "predicted_grid": rank,
+
+        "model_version":  "APEX_V7",
+    }
+
+
+def upload_race_predictions(
+    supabase: Client,
+    gp_name: str,
+    race_pred_df: pd.DataFrame,
+) -> int:
     if race_pred_df is None or race_pred_df.empty:
-        print("  ⚠  No race predictions to upload")
-        return
+        print(f"  ⚠  [{gp_name}] no race predictions to upload")
+        return 0
 
-    # Clear previous predictions for this GP
-    supabase.table("race_predictions").delete().eq("gp_id", gp_id).execute()
+    # DataFrame rows are already sorted by ExpectedFinish ascending
+    # (that's how predict_race() returns them), so rank = i+1.
+    rows = [
+        _race_row(gp_name, i + 1, row)
+        for i, (_, row) in enumerate(race_pred_df.iterrows())
+        if row.get("Abbreviation")
+    ]
+    if not rows:
+        return 0
 
-    rows = []
-    for _, row in race_pred_df.iterrows():
-        rows.append({
-            "gp_id":          gp_id,
-            "abbreviation":   str(row.get("Abbreviation", "")),
-            "full_name":      str(row.get("FullName", row.get("Abbreviation", ""))),
-            "team_name":      str(row.get("TeamName", "")),
-            "driver_number":  str(row.get("DriverNumber", "")),
-            "grid_position":  _safe_int(row.get("GridPosition", 20)),
-            "win_pct":        _safe_float(row.get("Win_%")),
-            "podium_pct":     _safe_float(row.get("Podium_%")),
-            "top5_pct":       _safe_float(row.get("Top5_%")),
-            "top10_pct":      _safe_float(row.get("Top10_%")),
-            "top15_pct":      _safe_float(row.get("Top15_%")),
-            "avg_finish_pos": _safe_float(row.get("AvgFinishPos")),
-            "clean_avg_pos":  _safe_float(row.get("CleanRaceAvgPos")),
-            "dnf_pct":        _safe_float(row.get("DNF_%")),
-            "zone_p1_5":      _safe_float(row.get("Zone_P1_5_%")),
-            "zone_p6_10":     _safe_float(row.get("Zone_P6_10_%")),
-            "zone_p11_15":    _safe_float(row.get("Zone_P11_15_%")),
-            "zone_p16p":      _safe_float(row.get("Zone_P16p_%")),
-            "p1_pct":         _safe_float(row.get("P1_%")),
-            "p2_pct":         _safe_float(row.get("P2_%")),
-            "p3_pct":         _safe_float(row.get("P3_%")),
-            "computed_at":    _now(),
-        })
+    (supabase.table("race_predictions")
+        .upsert(rows, on_conflict="gp_name,driver_abbr")
+        .execute())
 
-    supabase.table("race_predictions").insert(rows).execute()
-    print(f"  ✓  {len(rows)} race prediction rows uploaded")
+    print(f"  ✓  [{gp_name}] {len(rows)} race rows upserted")
+    return len(rows)
 
 
-# ─────────────────────────────────────────────────────────────────────
-#  UPLOAD QUALIFYING PREDICTIONS
-# ─────────────────────────────────────────────────────────────────────
-def upload_quali_predictions(supabase, gp_id: int, quali_pred_df: pd.DataFrame):
+def upload_quali_predictions(
+    supabase: Client,
+    gp_name: str,
+    quali_pred_df: pd.DataFrame,
+) -> int:
     if quali_pred_df is None or quali_pred_df.empty:
-        print("  ⚠  No quali predictions to upload")
-        return
+        print(f"  ⚠  [{gp_name}] no quali predictions to upload")
+        return 0
 
-    supabase.table("quali_predictions").delete().eq("gp_id", gp_id).execute()
+    rows = [
+        _quali_row(gp_name, i + 1, row)
+        for i, (_, row) in enumerate(quali_pred_df.iterrows())
+        if row.get("Abbreviation")
+    ]
+    if not rows:
+        return 0
 
-    rows = []
-    for _, row in quali_pred_df.iterrows():
-        rows.append({
-            "gp_id":         gp_id,
-            "abbreviation":  str(row.get("Abbreviation", "")),
-            "team_name":     str(row.get("TeamName", "")),
-            "expected_grid": _safe_float(row.get("ExpectedGrid")),
-            "pole_pct":      _safe_float(row.get("Pole_%")),
-            "front3_pct":    _safe_float(row.get("Front3_%")),
-            "q3_pct":        _safe_float(row.get("Q3_%")),
-            "quali_gap_s":   _safe_float(row.get("QualiGap_s")),
-            "computed_at":   _now(),
-        })
+    (supabase.table("quali_predictions")
+        .upsert(rows, on_conflict="gp_name,driver_abbr")
+        .execute())
 
-    supabase.table("quali_predictions").insert(rows).execute()
-    print(f"  ✓  {len(rows)} quali prediction rows uploaded")
+    print(f"  ✓  [{gp_name}] {len(rows)} quali rows upserted")
+    return len(rows)
 
 
 # ─────────────────────────────────────────────────────────────────────
-#  FETCH + UPLOAD ACTUAL RESULTS  (called post-race / post-quali)
-# ─────────────────────────────────────────────────────────────────────
-def fetch_and_upload_actuals(gp_name: str, session_type: str = "both"):
-    """
-    Pulls actual race/qualifying results from FastF1 for a completed session
-    and writes them to Supabase `actual_results` table.
-
-    session_type: "race" | "quali" | "both"
-
-    Call this after each session completes — typically:
-      - Saturday evening after qualifying
-      - Sunday evening after the race
-    """
-    supabase = get_client()
-
-    # Get the GP id
-    res = supabase.table("grand_prix").select("id").eq("name", gp_name).execute()
-    if not res.data:
-        print(f"  ⚠  '{gp_name}' not found in grand_prix table. Run predictor first.")
-        return
-    gp_id = res.data[0]["id"]
-
-    CACHE_DIR = "./f1_cache"
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    fastf1.Cache.enable_cache(CACHE_DIR)
-
-    sessions_to_fetch = []
-    if session_type in ("race", "both"):
-        sessions_to_fetch.append(("R", "race"))
-    if session_type in ("quali", "both"):
-        sessions_to_fetch.append(("Q", "quali"))
-
-    for ff1_key, label in sessions_to_fetch:
-        try:
-            s = fastf1.get_session(2026, gp_name, ff1_key)
-            s.load(telemetry=False, weather=False, messages=False)
-            results = s.results
-            if results is None or results.empty:
-                print(f"  ⚠  No {label} results found for {gp_name}")
-                continue
-
-            # Clear old actuals for this GP+session
-            (supabase.table("actual_results")
-             .delete()
-             .eq("gp_id", gp_id)
-             .eq("session", label)
-             .execute())
-
-            rows = []
-            for _, row in results.iterrows():
-                abbr = str(row.get("Abbreviation", ""))
-                pos  = row.get("Position")
-                try:
-                    pos = int(pos)
-                except (TypeError, ValueError):
-                    pos = None
-
-                if not abbr:
-                    continue
-
-                status = str(row.get("Status", "")).upper()
-                dnf = any(k in status for k in
-                          ["DNF", "RETIRED", "ACCIDENT", "MECHANICAL", "COLLISION"])
-
-                rows.append({
-                    "gp_id":       gp_id,
-                    "session":     label,
-                    "abbreviation": abbr,
-                    "position":    pos,
-                    "is_dnf":      dnf,
-                    "status":      str(row.get("Status", "")),
-                    "recorded_at": _now(),
-                })
-
-            if rows:
-                supabase.table("actual_results").insert(rows).execute()
-                print(f"  ✓  {len(rows)} actual {label} results uploaded for {gp_name}")
-
-            # Mark the GP row as having actual results
-            flag_col = "has_actual_race" if label == "race" else "has_actual_quali"
-            (supabase.table("grand_prix")
-             .update({flag_col: True})
-             .eq("id", gp_id)
-             .execute())
-
-        except Exception as e:
-            print(f"  ⚠  Could not fetch {label} results for {gp_name}: {e}")
-
-
-# ─────────────────────────────────────────────────────────────────────
-#  MAIN ENTRY — upload predictions  (called from run_pipeline.py)
+#  MAIN ENTRY POINT  — called from run_pipeline.py
 # ─────────────────────────────────────────────────────────────────────
 def upload_predictions(
     gp_name: str,
     race_pred_df: pd.DataFrame,
     quali_pred_df: pd.DataFrame,
-    circuit_params: dict,
-):
-    """
-    Main function called at the end of run_prediction() in f1_2026_predictor.py
-    """
-    print(f"\n  📤  Uploading predictions to Supabase: {gp_name}")
+    circuit_params: Optional[dict] = None,   # kept for backward compat
+) -> dict:
+    print(f"\n  📤  Uploading to Supabase: {gp_name}")
     supabase = get_client()
 
-    gp_id = upsert_grand_prix(supabase, gp_name, circuit_params)
-    upload_race_predictions(supabase, gp_id, race_pred_df)
-    upload_quali_predictions(supabase, gp_id, quali_pred_df)
+    n_race  = upload_race_predictions(supabase,  gp_name, race_pred_df)
+    n_quali = upload_quali_predictions(supabase, gp_name, quali_pred_df)
 
-    print(f"  ✅  Supabase upload complete for {gp_name}\n")
-    return gp_id
+    print(f"  ✅  Supabase upload complete for {gp_name} "
+          f"(race={n_race}, quali={n_quali})\n")
+    return {"race_rows": n_race, "quali_rows": n_quali}

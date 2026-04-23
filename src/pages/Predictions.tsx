@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Thermometer, CloudRain, Flame } from 'lucide-react';
+import { Thermometer, CloudRain, Flame, RefreshCw, AlertTriangle, Cpu } from 'lucide-react';
 import Card from '../components/Card';
-import { qualifyingPredictions, racePredictions, Race } from '../data/mock';
+import { Race } from '../data/mock';
 import { fetchCalendar } from '../api/f1';
 import { fetchRaceWeather, WeatherData } from '../api/weather';
+import {
+  predictForRace,
+  PredictionItem,
+  JobProgress,
+  resolvePredictorGpName,
+} from '../api/predictions';
 
 const COUNTRY_FLAGS: Record<string, string> = {
   'Australia': 'au', 'China': 'cn', 'Japan': 'jp', 'Bahrain': 'bh', 'Saudi Arabia': 'sa',
@@ -13,43 +19,85 @@ const COUNTRY_FLAGS: Record<string, string> = {
   'Mexico': 'mx', 'Brazil': 'br', 'Qatar': 'qa', 'Abu Dhabi': 'ae', 'UAE': 'ae',
 };
 
-function PredictionList({ title, items, subtitle }: { title: string; subtitle: string; items: typeof qualifyingPredictions }) {
+type PredictionPhase =
+  | { kind: 'idle' }
+  | { kind: 'running'; progress: JobProgress; cached: boolean; startedAt: number }
+  | { kind: 'done'; cached: boolean; elapsedMs: number }
+  | { kind: 'error'; message: string };
+
+function PredictionList({
+  title,
+  items,
+  subtitle,
+  loading,
+  empty,
+  secondaryMetric,
+}: {
+  title: string;
+  subtitle: string;
+  items: PredictionItem[];
+  loading: boolean;
+  empty: string;
+  secondaryMetric?: (it: PredictionItem) => string | null;
+}) {
   return (
     <Card className="p-6">
       <div className="mb-6">
         <div className="text-sm font-semibold text-neutral-900 dark:text-white">{title}</div>
         <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{subtitle}</div>
       </div>
-      <div className="space-y-3">
-        {items.map((item, i) => (
-          <div key={item.driver + i} className="group">
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-mono text-neutral-400 dark:text-neutral-500 w-5">{String(i + 1).padStart(2, '0')}</span>
-                <span
-                  className="text-[10px] font-bold tracking-widest w-10"
-                  style={{ color: item.color }}
-                >
-                  {item.driver}
-                </span>
-                <span className="text-sm text-neutral-900 dark:text-white">{item.name}</span>
-                <span className="text-xs text-neutral-400 dark:text-neutral-500 hidden md:inline">· {item.team}</span>
+      {loading ? (
+        <div className="space-y-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-10 rounded bg-neutral-100 dark:bg-white/5 animate-pulse" />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        <div className="py-8 text-center text-sm text-neutral-500 dark:text-neutral-400">{empty}</div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((item, i) => {
+            const prob = Math.max(0, Math.min(100, Number(item.prob) || 0));
+            const barWidth = Math.min(100, prob * 2.8);
+            const secondary = secondaryMetric?.(item);
+            return (
+              <div key={item.driver + i} className="group">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xs font-mono text-neutral-400 dark:text-neutral-500 w-5">{String(i + 1).padStart(2, '0')}</span>
+                    <span
+                      className="text-[10px] font-bold tracking-widest w-10"
+                      style={{ color: item.color }}
+                    >
+                      {item.driver}
+                    </span>
+                    <span className="text-sm text-neutral-900 dark:text-white truncate">{item.name}</span>
+                    <span className="text-xs text-neutral-400 dark:text-neutral-500 hidden md:inline truncate">· {item.team}</span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {secondary && (
+                      <span className="text-[10px] text-neutral-400 dark:text-neutral-500 tabular-nums">{secondary}</span>
+                    )}
+                    <span className="text-sm font-semibold tabular-nums" style={{ color: item.color }}>
+                      {prob.toFixed(1)}%
+                    </span>
+                  </div>
+                </div>
+                <div className="h-1.5 rounded-full bg-neutral-100 dark:bg-white/5 overflow-hidden ml-10">
+                  <div
+                    className="h-full rounded-full transition-all duration-700"
+                    style={{
+                      width: `${barWidth}%`,
+                      background: `linear-gradient(90deg, ${item.color}55, ${item.color})`,
+                      boxShadow: `0 0 12px ${item.color}66`,
+                    }}
+                  />
+                </div>
               </div>
-              <span className="text-sm font-semibold tabular-nums" style={{ color: item.color }}>{item.prob}%</span>
-            </div>
-            <div className="h-1.5 rounded-full bg-neutral-100 dark:bg-white/5 overflow-hidden ml-10">
-              <div
-                className="h-full rounded-full transition-all duration-700"
-                style={{
-                  width: `${item.prob * 2.8}%`,
-                  background: `linear-gradient(90deg, ${item.color}55, ${item.color})`,
-                  boxShadow: `0 0 12px ${item.color}66`,
-                }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </Card>
   );
 }
@@ -120,11 +168,110 @@ function sourceLabel(w: WeatherData | null): string {
   return '';
 }
 
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${m}m ${s}s`;
+}
+
+function PredictionStatusBanner({
+  phase,
+  gpLabel,
+  onRetry,
+}: {
+  phase: PredictionPhase;
+  gpLabel: string;
+  onRetry: () => void;
+}) {
+  if (phase.kind === 'idle') return null;
+
+  if (phase.kind === 'running') {
+    const pct = Math.max(1, phase.progress.percent);
+    return (
+      <Card className="p-4 relative overflow-hidden">
+        <div
+          aria-hidden
+          className="absolute inset-y-0 left-0 bg-gradient-to-r from-sky-500/10 via-sky-500/5 to-transparent transition-all duration-500"
+          style={{ width: `${pct}%` }}
+        />
+        <div className="relative flex items-center gap-4">
+          <span className="flex items-center justify-center w-9 h-9 rounded-lg bg-sky-500/15 text-sky-500">
+            <Cpu size={16} className="animate-pulse" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-white truncate">
+              <span>Predicting {gpLabel}</span>
+              {phase.cached && (
+                <span className="text-[10px] uppercase tracking-widest text-emerald-500">cached</span>
+              )}
+            </div>
+            <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5 truncate">
+              {phase.progress.message || 'Running APEX V7 pipeline…'}
+            </div>
+          </div>
+          <div className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400 shrink-0">
+            {pct}%
+          </div>
+        </div>
+        <div className="relative mt-3 h-1 rounded-full bg-neutral-100 dark:bg-white/5 overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-sky-400 to-sky-600 transition-all duration-500"
+            style={{ width: `${pct}%`, boxShadow: '0 0 12px #38bdf866' }}
+          />
+        </div>
+      </Card>
+    );
+  }
+
+  if (phase.kind === 'done') {
+    return (
+      <Card className="p-4">
+        <div className="flex items-center gap-3">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b98188]" />
+          <div className="text-xs text-neutral-500 dark:text-neutral-400">
+            {phase.cached ? 'Loaded cached prediction' : `Computed in ${formatElapsed(phase.elapsedMs)}`}
+            <span className="mx-2">·</span>
+            APEX V7 · XGBoost + FastF1
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // error
+  return (
+    <Card className="p-4 border-red-500/30">
+      <div className="flex items-center gap-3">
+        <span className="flex items-center justify-center w-9 h-9 rounded-lg bg-red-500/15 text-red-500">
+          <AlertTriangle size={16} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-neutral-900 dark:text-white">Prediction failed</div>
+          <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5 break-all">{phase.message}</div>
+        </div>
+        <button
+          onClick={onRetry}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-900 dark:bg-white text-white dark:text-black text-xs font-medium hover:scale-[1.02] transition-transform"
+        >
+          <RefreshCw size={12} /> Retry
+        </button>
+      </div>
+    </Card>
+  );
+}
+
 export default function Predictions({ activeEvent }: { activeEvent?: number | null }) {
   const [races, setRaces] = useState<Race[]>([]);
   const [selectedRound, setSelectedRound] = useState<number | null>(activeEvent ?? null);
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
+  const [racePreds, setRacePreds] = useState<PredictionItem[]>([]);
+  const [qualiPreds, setQualiPreds] = useState<PredictionItem[]>([]);
+  const [predictionPhase, setPredictionPhase] = useState<PredictionPhase>({ kind: 'idle' });
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [requestedRound, setRequestedRound] = useState<number | null>(null);
   const gpScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -162,15 +309,81 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
     };
   }, [currentRace?.round, currentRace?.meeting_key]);
 
+  // Live prediction: only fires when the user explicitly picks a GP
+  // (requestedRound), not from the auto-selection on mount.
+  const requestedRace =
+    requestedRound != null ? races.find(r => r.round === requestedRound) ?? null : null;
+
+  useEffect(() => {
+    if (!requestedRace) {
+      setRacePreds([]);
+      setQualiPreds([]);
+      setPredictionPhase({ kind: 'idle' });
+      return;
+    }
+
+    const controller = new AbortController();
+    const startedAt = Date.now();
+
+    setRacePreds([]);
+    setQualiPreds([]);
+    setPredictionPhase({
+      kind: 'running',
+      progress: { percent: 1, message: 'Submitting job…' },
+      cached: false,
+      startedAt,
+    });
+
+    predictForRace(requestedRace, {
+      signal: controller.signal,
+      force: retryNonce > 0 && retryNonce !== Infinity,
+      onProgress: (p) => {
+        setPredictionPhase(prev => {
+          if (prev.kind !== 'running') return prev;
+          return {
+            kind: 'running',
+            progress: { percent: p.percent, message: p.message },
+            cached: p.cached,
+            startedAt: prev.startedAt,
+          };
+        });
+      },
+    })
+      .then(({ raceItems, qualiItems }) => {
+        if (controller.signal.aborted) return;
+        setRacePreds(raceItems);
+        setQualiPreds(qualiItems);
+        setPredictionPhase(prev => ({
+          kind: 'done',
+          cached: prev.kind === 'running' ? prev.cached : false,
+          elapsedMs: Date.now() - startedAt,
+        }));
+      })
+      .catch(err => {
+        if (controller.signal.aborted) return;
+        const message = err instanceof Error ? err.message : String(err);
+        if (message === 'Aborted') return;
+        setPredictionPhase({ kind: 'error', message });
+      });
+
+    return () => controller.abort();
+  }, [requestedRace?.round, requestedRace?.country, requestedRace?.name, retryNonce]);
+
+  const predictorGpLabel = requestedRace
+    ? resolvePredictorGpName(requestedRace)
+    : currentRace
+      ? resolvePredictorGpName(currentRace)
+      : '';
+
   return (
     <div className="max-w-7xl mx-auto px-6 py-12 animate-fade-in space-y-8">
       <div>
-        <span className="text-xs uppercase tracking-widest text-neutral-500 dark:text-neutral-400">ML model · v3.4.2</span>
+        <span className="text-xs uppercase tracking-widest text-neutral-500 dark:text-neutral-400">APEX V7 · XGBoost + FastF1</span>
         <h1 className="text-4xl font-light text-neutral-900 dark:text-white mt-2">Predictions</h1>
         <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-2 max-w-xl">
           {currentRace
-            ? `Probabilistic forecasts for Round ${currentRace.round} — ${currentRace.name}. Weather sourced live, then Open-Meteo forecast, then climatology.`
-            : 'Probabilistic forecasts generated from 12,400 historical sessions.'}
+            ? `Live ML forecasts for Round ${currentRace.round} — ${currentRace.name}. XGBoost classifiers trained on 2022–2026 data; weather sourced live.`
+            : 'Live ML forecasts for every 2026 Grand Prix — qualifying + race probabilities.'}
         </p>
       </div>
 
@@ -206,7 +419,10 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
                 return (
                   <button
                     key={r.round}
-                    onClick={() => setSelectedRound(r.round)}
+                    onClick={() => {
+                      setSelectedRound(r.round);
+                      setRequestedRound(r.round);
+                    }}
                     className={`flex-shrink-0 flex flex-col items-start gap-2 px-4 py-4 rounded-2xl border transition-all duration-200 min-w-[calc(25%-6px)] min-h-[140px] relative overflow-hidden ${
                       isSelected
                         ? 'border-neutral-900 dark:border-white shadow-lg scale-105'
@@ -292,16 +508,64 @@ export default function Predictions({ activeEvent }: { activeEvent?: number | nu
         </div>
       </div>
 
+      {/* Prediction status banner */}
+      {predictionPhase.kind === 'idle' && currentRace ? (
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <span className="flex items-center justify-center w-9 h-9 rounded-lg bg-neutral-100 dark:bg-white/5 text-neutral-500">
+              <Cpu size={16} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-neutral-900 dark:text-white">
+                Ready to predict
+              </div>
+              <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+                Click a Grand Prix in the picker above to run the APEX V7 model.
+              </div>
+            </div>
+          </div>
+        </Card>
+      ) : (
+        <PredictionStatusBanner
+          phase={predictionPhase}
+          gpLabel={predictorGpLabel}
+          onRetry={() => setRetryNonce(n => n + 1)}
+        />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <PredictionList
           title="Qualifying"
-          subtitle="Pole position probability"
-          items={qualifyingPredictions}
+          subtitle="Pole probability · APEX V7 XGBoost"
+          items={qualiPreds}
+          loading={predictionPhase.kind === 'running'}
+          empty={
+            predictionPhase.kind === 'idle'
+              ? 'Click a Grand Prix above to start'
+              : currentRace
+                ? `No qualifying prediction yet for ${currentRace.name}.`
+                : 'Select a Grand Prix'
+          }
+          secondaryMetric={(it) => it.q3Hint != null ? `Q3 ${it.q3Hint.toFixed(1)}%` : null}
         />
         <PredictionList
           title="Race"
-          subtitle="Race win probability"
-          items={racePredictions}
+          subtitle="Win probability · APEX V7 XGBoost"
+          items={racePreds}
+          loading={predictionPhase.kind === 'running'}
+          empty={
+            predictionPhase.kind === 'idle'
+              ? 'Click a Grand Prix above to start'
+              : currentRace
+                ? `No race prediction yet for ${currentRace.name}.`
+                : 'Select a Grand Prix'
+          }
+          secondaryMetric={(it) => {
+            const parts: string[] = [];
+            if (it.expectedFinish != null) parts.push(`E${it.expectedFinish.toFixed(0)}`);
+            if (it.gridPosition != null) parts.push(`G${it.gridPosition}`);
+            return parts.length ? parts.join(' · ') : null;
+          }}
         />
       </div>
     </div>

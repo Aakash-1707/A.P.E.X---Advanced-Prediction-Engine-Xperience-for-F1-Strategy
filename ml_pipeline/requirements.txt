@@ -5,3 +5,5 @@ xgboost
 scikit-learn
 supabase
 python-dotenv
+fastapi>=0.110
+uvicorn[standard]>=0.27

@@ -1,109 +1,124 @@
 name: F1 2026 Prediction Pipeline
 
+# ──────────────────────────────────────────────────────────────────────
+#  What this workflow does
+#  ──────────────────────────────────────────────────────────────────────
+#  Runs ml_pipeline/run_pipeline.py, which trains the APEX V7 XGBoost
+#  predictor on all historical F1 data (via FastF1), computes 2026 race
+#  + qualifying predictions, and upserts them into Supabase.
+#
+#  Triggers
+#  ────────
+#  • workflow_dispatch  — manual "Run workflow" button (optionally pin
+#                         a single GP via the input)
+#  • schedule (weekly)  — Monday 06:00 UTC → refresh every GP
+#
+#  Required repository secrets (Settings → Secrets and variables →
+#  Actions → New repository secret):
+#
+#    SUPABASE_URL            https://<ref>.supabase.co
+#    SUPABASE_SERVICE_KEY    service_role key (keep this PRIVATE)
+# ──────────────────────────────────────────────────────────────────────
+
 on:
-  # ── Manual trigger (run from GitHub Actions UI) ───────────────────
   workflow_dispatch:
     inputs:
       gp_name:
-        description: 'Grand Prix name (e.g. Spanish Grand Prix)'
+        description: 'Grand Prix name (leave blank to run ALL 24 GPs)'
         required: false
         default: ''
-      mode:
-        description: 'Mode: predictions | actuals_race | actuals_quali | actuals_both'
+        type: string
+      skip_fresh_hours:
+        description: 'With "all": skip GPs updated within this many hours (0 = never skip)'
         required: false
-        default: 'predictions'
-      sims:
-        description: 'Number of simulations'
-        required: false
-        default: '100000'
+        default: '0'
+        type: string
 
-  # ── Scheduled runs ────────────────────────────────────────────────
   schedule:
-    # Every Monday at 06:00 UTC — re-run upcoming GP predictions
+    # Every Monday at 06:00 UTC — full calendar refresh
     - cron: '0 6 * * 1'
-    # Every Sunday at 16:00 UTC — sync race results (races finish ~14:00–15:30 UTC)
-    - cron: '0 16 * * 0'
-    # Every Saturday at 16:00 UTC — sync qualifying results
-    - cron: '0 16 * * 6'
+
+# Only one pipeline run at a time so concurrent triggers don't race
+# when writing to Supabase.
+concurrency:
+  group: f1-pipeline
+  cancel-in-progress: false
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 120   # 100k sims can take ~30-60 min on GitHub runners
+    timeout-minutes: 60   # ~5 min for 24 GPs warm-cache, ~20-30 min cold
+
+    env:
+      # Avoid Intel OpenMP / MKL fork-safety warnings on CI runners.
+      OMP_NUM_THREADS: '1'
+      MKL_THREADING_LAYER: GNU
+      KMP_INIT_AT_FORK: 'FALSE'
+      PYTHONUNBUFFERED: '1'
 
     steps:
-      # ── 1. Checkout your repo ─────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Set up Python ─────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: ml_pipeline/requirements.txt
 
-      # ── 3. Install dependencies ───────────────────────────────────
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r ml_pipeline/requirements.txt
 
-      # ── 4. Restore FastF1 cache (speeds up re-runs dramatically) ─
+      # ── FastF1 session cache ─────────────────────────────────────────
+      # Warm cache: full pipeline ≈ 5 min. Cold cache: 25–40 min.
+      # We restore the latest cache and save a fresh copy at the end of
+      # each run (keyed on run_id so we never collide).
       - name: Restore FastF1 cache
-        uses: actions/cache@v4
+        id: cache-restore
+        uses: actions/cache/restore@v4
         with:
-          path: ./ml_pipeline/f1_cache
-          key: fastf1-cache-${{ runner.os }}-${{ hashFiles('ml_pipeline/requirements.txt') }}
+          path: ml_pipeline/f1_cache
+          key: fastf1-cache-v1-${{ github.run_id }}
           restore-keys: |
-            fastf1-cache-${{ runner.os }}-
+            fastf1-cache-v1-
 
-      # ── 5. Run pipeline ───────────────────────────────────────────
-      - name: Run F1 pipeline
+      - name: Run pipeline
+        working-directory: ml_pipeline
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        working-directory: ./ml_pipeline
         run: |
-          MODE="${{ github.event.inputs.mode || 'predictions' }}"
-          GP="${{ github.event.inputs.gp_name || '' }}"
-          SIMS="${{ github.event.inputs.sims || '100000' }}"
-          DAY=$(date +%u)   # 1=Mon ... 7=Sun
+          GP='${{ github.event.inputs.gp_name }}'
+          SKIP='${{ github.event.inputs.skip_fresh_hours }}'
+          SKIP="${SKIP:-0}"
 
-          echo "Mode: $MODE | GP: $GP | Sims: $SIMS | Day: $DAY"
+          echo "─────────────────────────────────────────────"
+          echo "  Trigger    : ${{ github.event_name }}"
+          echo "  GP target  : ${GP:-<all 24 GPs>}"
+          echo "  Skip-fresh : ${SKIP}h"
+          echo "─────────────────────────────────────────────"
 
-          if [ "$MODE" = "predictions" ]; then
-            if [ -n "$GP" ]; then
-              # Specific GP requested manually
-              python run_pipeline.py --gp "$GP" --sims "$SIMS"
-            else
-              # Scheduled Monday run: re-run all future GPs
-              # (You can limit this to 2-3 upcoming GPs by editing run_pipeline.py)
-              python run_pipeline.py --gp "$(python -c "
-          from f1_2026_predictor import ALL_2026_GPS
-          from datetime import date
-          today = date.today()
-          # Find next 3 upcoming GPs (just run the next one for speed)
-          # Edit ALL_2026_GPS dates logic here if needed
-          print(ALL_2026_GPS[0])
-          ")" --sims "$SIMS"
-            fi
-
-          elif [ "$MODE" = "actuals_race" ]; then
-            python run_pipeline.py --gp "$GP" --actuals race
-
-          elif [ "$MODE" = "actuals_quali" ]; then
-            python run_pipeline.py --gp "$GP" --actuals quali
-
-          elif [ "$MODE" = "actuals_both" ]; then
-            python run_pipeline.py --gp "$GP" --actuals both
-
+          if [ -n "$GP" ]; then
+            python run_pipeline.py --gp "$GP"
+          else
+            python run_pipeline.py --all --skip-fresh "$SKIP"
           fi
 
-      # ── 6. Save FastF1 cache ──────────────────────────────────────
       - name: Save FastF1 cache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ./ml_pipeline/f1_cache
-          key: fastf1-cache-${{ runner.os }}-${{ github.run_id }}
+          path: ml_pipeline/f1_cache
+          key: fastf1-cache-v1-${{ github.run_id }}
+
+      - name: Pipeline summary
+        if: always()
+        run: |
+          echo "## F1 2026 Pipeline run" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **GP**: ${{ github.event.inputs.gp_name || '_all 24 GPs_' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

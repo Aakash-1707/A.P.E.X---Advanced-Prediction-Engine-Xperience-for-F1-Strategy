@@ -21,3 +21,13 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# FastF1 on-disk cache (regenerated on every machine / CI runner)
+ml_pipeline/f1_cache/
