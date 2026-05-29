@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import LineChart from '../components/LineChart';
 import { drivers } from '../data/mock';
 import { Activity, Gauge, Zap, TrendingUp, Play, Pause, Map as MapIcon } from 'lucide-react';
-import { fetchCalendar, fetchAllDrivers, fetchOpenF1Sessions } from '../api/f1';
+import { fetchCalendar, fetchAllDrivers, fetchOpenF1Sessions, fetchFastestLapTelemetry } from '../api/f1';
 import { fetchTelemetryFromDB } from '../api/supabase-telemetry';
 import { getFlagUrl } from '../lib/flags';
 
@@ -326,8 +326,16 @@ export default function Telemetry({ activeEvent }: Props) {
     setIsLoadingTelemetry(true);
 
     Promise.all([
-      fetchTelemetryFromDB(activeSessionObj.session_key, driverANum),
-      fetchTelemetryFromDB(activeSessionObj.session_key, driverBNum),
+      fetchTelemetryFromDB(activeSessionObj.session_key, driverANum).then(res => {
+        if (res && res.carData && res.carData.length > 0) return res;
+        console.log(`[Telemetry] DB empty for driver A (${driverA}), falling back to direct OpenF1 API...`);
+        return fetchFastestLapTelemetry(activeSessionObj.session_key, driverANum);
+      }),
+      fetchTelemetryFromDB(activeSessionObj.session_key, driverBNum).then(res => {
+        if (res && res.carData && res.carData.length > 0) return res;
+        console.log(`[Telemetry] DB empty for driver B (${driverB}), falling back to direct OpenF1 API...`);
+        return fetchFastestLapTelemetry(activeSessionObj.session_key, driverBNum);
+      }),
     ]).then(([resA, resB]) => {
       if (aborted) return;
       setTelyA(resA);

@@ -11,6 +11,30 @@ import {
   resolvePredictorGpName,
 } from '../api/predictions';
 
+function DeltaBadge({ predicted, actual }: { predicted: number; actual: number }) {
+  const delta = predicted - actual; // positive = beat prediction (finished higher)
+  if (delta === 0) {
+    return (
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/15 text-emerald-500 tabular-nums" title="Exact match">
+        ✓
+      </span>
+    );
+  }
+  const better = delta > 0;
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold tabular-nums ${
+        better
+          ? 'bg-emerald-500/15 text-emerald-500'
+          : 'bg-red-500/15 text-red-400'
+      }`}
+      title={better ? `Finished ${delta} place${delta > 1 ? 's' : ''} higher than predicted` : `Finished ${-delta} place${-delta > 1 ? 's' : ''} lower than predicted`}
+    >
+      {better ? '↑' : '↓'}{Math.abs(delta)}
+    </span>
+  );
+}
+
 function PredictionList({
   title,
   items,
@@ -26,10 +50,19 @@ function PredictionList({
   empty: string;
   secondaryMetric?: (it: PredictionItem) => string | null;
 }) {
+  const hasActuals = items.some(it => it.actualPosition != null);
+
   return (
     <Card className="p-6">
       <div className="mb-6">
-        <div className="text-sm font-semibold text-neutral-900 dark:text-white">{title}</div>
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-semibold text-neutral-900 dark:text-white">{title}</div>
+          {hasActuals && (
+            <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+              Results In
+            </span>
+          )}
+        </div>
         <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{subtitle}</div>
       </div>
       {loading ? (
@@ -42,10 +75,23 @@ function PredictionList({
         <div className="py-8 text-center text-sm text-neutral-500 dark:text-neutral-400">{empty}</div>
       ) : (
         <div className="space-y-3">
+          {/* Column headers when actuals are available */}
+          {hasActuals && (
+            <div className="flex items-center justify-between text-[9px] uppercase tracking-widest text-neutral-400 dark:text-neutral-600 font-semibold mb-1 pl-10 pr-1">
+              <span>Driver</span>
+              <div className="flex items-center gap-3">
+                <span className="w-12 text-center">Actual</span>
+                <span className="w-8 text-center">Δ</span>
+                <span className="w-14 text-right">Prob</span>
+              </div>
+            </div>
+          )}
           {items.map((item, i) => {
             const prob = Math.max(0, Math.min(100, Number(item.prob) || 0));
             const barWidth = Math.min(100, prob * 2.8);
             const secondary = secondaryMetric?.(item);
+            const predicted = item.predictedPosition ?? (i + 1);
+            const actual = item.actualPosition;
             return (
               <div key={item.driver + i} className="group">
                 <div className="flex items-center justify-between mb-1.5">
@@ -61,10 +107,23 @@ function PredictionList({
                     <span className="text-xs text-neutral-400 dark:text-neutral-500 hidden md:inline truncate">· {item.team}</span>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
-                    {secondary && (
+                    {secondary && !hasActuals && (
                       <span className="text-[10px] text-neutral-400 dark:text-neutral-500 tabular-nums">{secondary}</span>
                     )}
-                    <span className="text-sm font-semibold tabular-nums" style={{ color: item.color }}>
+                    {actual != null && (
+                      <>
+                        <span
+                          className="text-xs font-bold tabular-nums text-neutral-700 dark:text-neutral-300 w-12 text-center"
+                          title={`Actual finish: P${actual}`}
+                        >
+                          P{actual}
+                        </span>
+                        <span className="w-8 flex justify-center">
+                          <DeltaBadge predicted={predicted} actual={actual} />
+                        </span>
+                      </>
+                    )}
+                    <span className="text-sm font-semibold tabular-nums w-14 text-right" style={{ color: item.color }}>
                       {prob.toFixed(1)}%
                     </span>
                   </div>

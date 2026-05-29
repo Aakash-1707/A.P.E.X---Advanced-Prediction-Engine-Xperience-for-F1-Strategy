@@ -297,22 +297,56 @@ const DRIVER_NUMBERS: Record<string, number> = {
 };
 
 export async function fetchAllDrivers(): Promise<Driver[]> {
-  const { data, error } = await supabase.from('vw_driver_standings').select('*').order('position', { ascending: true });
-  if (error || !data) return mockDrivers;
-  
-  return data.map((d: any) => {
-    const abbr = d.driver.split(' ').pop().substring(0, 3).toUpperCase();
-    return {
-      pos: d.position,
-      name: d.driver,
-      team: d.team || 'Unknown',
-      points: d.points,
-      image: resolveDriverImage(abbr),
-      abbr: abbr,
-      number: DRIVER_NUMBERS[abbr] || 0,
-      color: resolveDriverColor(d.team || ''),
-    };
-  });
+  try {
+    const res = await fetchT('https://api.jolpi.ca/ergast/f1/2026/driverStandings.json');
+    if (res.ok) {
+      const json = await res.json();
+      const list = json?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings;
+      if (Array.isArray(list) && list.length > 0) {
+        return list.map((d: any) => {
+          const abbr = d.Driver.code || d.Driver.familyName.substring(0, 3).toUpperCase();
+          const teamName = d.Constructors?.[0]?.name || 'Unknown';
+          return {
+            pos: parseInt(d.position),
+            name: `${d.Driver.givenName} ${d.Driver.familyName}`,
+            team: teamName,
+            points: parseFloat(d.points) || 0,
+            image: resolveDriverImage(abbr),
+            abbr: abbr,
+            number: parseInt(d.Driver.permanentNumber) || DRIVER_NUMBERS[abbr] || 0,
+            color: resolveDriverColor(teamName),
+          };
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[API] Failed to fetch current driver standings from Jolpica:", e);
+  }
+
+  // Fallback 1: Supabase views
+  try {
+    const { data, error } = await supabase.from('vw_driver_standings').select('*').order('position', { ascending: true });
+    if (!error && data && data.length > 0) {
+      return data.map((d: any) => {
+        const abbr = d.driver.split(' ').pop().substring(0, 3).toUpperCase();
+        return {
+          pos: d.position,
+          name: d.driver,
+          team: d.team || 'Unknown',
+          points: d.points,
+          image: resolveDriverImage(abbr),
+          abbr: abbr,
+          number: DRIVER_NUMBERS[abbr] || 0,
+          color: resolveDriverColor(d.team || ''),
+        };
+      });
+    }
+  } catch (e) {
+    console.warn("[DB] Fallback driver standings failed:", e);
+  }
+
+  // Fallback 2: Mock data
+  return mockDrivers;
 }
 
 export async function fetchDriversChampionship(): Promise<Driver[]> {
@@ -321,15 +355,44 @@ export async function fetchDriversChampionship(): Promise<Driver[]> {
 }
 
 export async function fetchAllConstructors(): Promise<Constructor[]> {
-  const { data, error } = await supabase.from('vw_constructor_standings').select('*').order('position', { ascending: true });
-  if (error || !data) return mockConstructors.map(c => ({ ...c, color: resolveDriverColor(c.name) }));
+  try {
+    const res = await fetchT('https://api.jolpi.ca/ergast/f1/2026/constructorStandings.json');
+    if (res.ok) {
+      const json = await res.json();
+      const list = json?.MRData?.StandingsTable?.StandingsLists?.[0]?.ConstructorStandings;
+      if (Array.isArray(list) && list.length > 0) {
+        return list.map((c: any) => {
+          const teamName = c.Constructor.name;
+          return {
+            pos: parseInt(c.position),
+            name: teamName,
+            points: parseFloat(c.points) || 0,
+            color: resolveDriverColor(teamName),
+          };
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[API] Failed to fetch current constructor standings from Jolpica:", e);
+  }
 
-  return data.map((c: any) => ({
-    pos: c.position,
-    name: c.team,
-    points: c.points,
-    color: resolveDriverColor(c.team),
-  }));
+  // Fallback 1: Supabase views
+  try {
+    const { data, error } = await supabase.from('vw_constructor_standings').select('*').order('position', { ascending: true });
+    if (!error && data && data.length > 0) {
+      return data.map((c: any) => ({
+        pos: c.position,
+        name: c.team,
+        points: c.points,
+        color: resolveDriverColor(c.team),
+      }));
+    }
+  } catch (e) {
+    console.warn("[DB] Fallback constructor standings failed:", e);
+  }
+
+  // Fallback 2: Mock data
+  return mockConstructors.map(c => ({ ...c, color: resolveDriverColor(c.name) }));
 }
 
 export async function fetchConstructorsChampionship(): Promise<Constructor[]> {
