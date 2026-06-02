@@ -1,5 +1,5 @@
 import { Driver, Constructor, Race, teamColors, drivers as mockDrivers, constructors as mockConstructors, races as mockRaces } from '../data/mock';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseConfigured } from '../lib/supabase';
 const OPENF1_URL = 'https://api.openf1.org/v1';
 
 const WEEKEND_TTL = 5 * 60 * 1000; // 5 minutes
@@ -290,63 +290,85 @@ async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors
   return { drivers, constructors };
 }
 
+// Home/Grid load drivers + constructors in parallel — share one OpenF1 fetch.
+let openF1StandingsInflight: ReturnType<typeof fetchOpenF1Standings> | null = null;
+
+function getOpenF1StandingsShared() {
+  if (!openF1StandingsInflight) {
+    openF1StandingsInflight = fetchOpenF1Standings().finally(() => {
+      openF1StandingsInflight = null;
+    });
+  }
+  return openF1StandingsInflight;
+}
+
 const DRIVER_NUMBERS: Record<string, number> = {
   NOR: 1, VER: 3, BOR: 5, HAD: 6, GAS: 10, PER: 11, ANT: 12, ALO: 14,
   LEC: 16, STR: 18, ALB: 23, HUL: 27, LAW: 30, OCO: 31, LIN: 41, COL: 43,
   HAM: 44, SAI: 55, RUS: 63, BOT: 77, PIA: 81, BEA: 87
 };
 
+function mapSupabaseDrivers(rows: any[]): Driver[] {
+  return rows.map((d: any) => {
+    const abbr = d.driver.split(' ').pop().substring(0, 3).toUpperCase();
+    return {
+      pos: d.position,
+      name: d.driver,
+      team: d.team || 'Unknown',
+      points: d.points,
+      image: resolveDriverImage(abbr),
+      abbr,
+      number: DRIVER_NUMBERS[abbr] || 0,
+      color: resolveDriverColor(d.team || ''),
+    };
+  });
+}
+
+function mapSupabaseConstructors(rows: any[]): Constructor[] {
+  return rows.map((c: any) => ({
+    pos: c.position,
+    name: c.team,
+    points: c.points,
+    color: resolveDriverColor(c.team),
+  }));
+}
+
+async function fetchDriversFromSupabase(): Promise<Driver[] | null> {
+  if (!supabaseConfigured) return null;
+  const { data, error } = await supabase
+    .from('vw_driver_standings')
+    .select('*')
+    .order('position', { ascending: true });
+  if (error || !data?.length) {
+    if (error) console.warn('[Standings] Supabase drivers:', error.message);
+    return null;
+  }
+  return mapSupabaseDrivers(data);
+}
+
+async function fetchConstructorsFromSupabase(): Promise<Constructor[] | null> {
+  if (!supabaseConfigured) return null;
+  const { data, error } = await supabase
+    .from('vw_constructor_standings')
+    .select('*')
+    .order('position', { ascending: true });
+  if (error || !data?.length) {
+    if (error) console.warn('[Standings] Supabase constructors:', error.message);
+    return null;
+  }
+  return mapSupabaseConstructors(data);
+}
+
 export async function fetchAllDrivers(): Promise<Driver[]> {
-  try {
-    const res = await fetchT('https://api.jolpi.ca/ergast/f1/2026/driverStandings.json');
-    if (res.ok) {
-      const json = await res.json();
-      const list = json?.MRData?.StandingsTable?.StandingsLists?.[0]?.DriverStandings;
-      if (Array.isArray(list) && list.length > 0) {
-        return list.map((d: any) => {
-          const abbr = d.Driver.code || d.Driver.familyName.substring(0, 3).toUpperCase();
-          const teamName = d.Constructors?.[0]?.name || 'Unknown';
-          return {
-            pos: parseInt(d.position),
-            name: `${d.Driver.givenName} ${d.Driver.familyName}`,
-            team: teamName,
-            points: parseFloat(d.points) || 0,
-            image: resolveDriverImage(abbr),
-            abbr: abbr,
-            number: parseInt(d.Driver.permanentNumber) || DRIVER_NUMBERS[abbr] || 0,
-            color: resolveDriverColor(teamName),
-          };
-        });
-      }
-    }
-  } catch (e) {
-    console.warn("[API] Failed to fetch current driver standings from Jolpica:", e);
-  }
+  return fetchWithCache('f1_driver_standings_v6', async () => {
+    const fromDb = await fetchDriversFromSupabase();
+    if (fromDb?.length) return fromDb;
 
-  // Fallback 1: Supabase views
-  try {
-    const { data, error } = await supabase.from('vw_driver_standings').select('*').order('position', { ascending: true });
-    if (!error && data && data.length > 0) {
-      return data.map((d: any) => {
-        const abbr = d.driver.split(' ').pop().substring(0, 3).toUpperCase();
-        return {
-          pos: d.position,
-          name: d.driver,
-          team: d.team || 'Unknown',
-          points: d.points,
-          image: resolveDriverImage(abbr),
-          abbr: abbr,
-          number: DRIVER_NUMBERS[abbr] || 0,
-          color: resolveDriverColor(d.team || ''),
-        };
-      });
-    }
-  } catch (e) {
-    console.warn("[DB] Fallback driver standings failed:", e);
-  }
+    const { drivers } = await getOpenF1StandingsShared();
+    if (drivers.length) return drivers;
 
-  // Fallback 2: Mock data
-  return mockDrivers;
+    throw new Error('No driver standings available');
+  }, mockDrivers);
 }
 
 export async function fetchDriversChampionship(): Promise<Driver[]> {
@@ -355,44 +377,15 @@ export async function fetchDriversChampionship(): Promise<Driver[]> {
 }
 
 export async function fetchAllConstructors(): Promise<Constructor[]> {
-  try {
-    const res = await fetchT('https://api.jolpi.ca/ergast/f1/2026/constructorStandings.json');
-    if (res.ok) {
-      const json = await res.json();
-      const list = json?.MRData?.StandingsTable?.StandingsLists?.[0]?.ConstructorStandings;
-      if (Array.isArray(list) && list.length > 0) {
-        return list.map((c: any) => {
-          const teamName = c.Constructor.name;
-          return {
-            pos: parseInt(c.position),
-            name: teamName,
-            points: parseFloat(c.points) || 0,
-            color: resolveDriverColor(teamName),
-          };
-        });
-      }
-    }
-  } catch (e) {
-    console.warn("[API] Failed to fetch current constructor standings from Jolpica:", e);
-  }
+  return fetchWithCache('f1_constructor_standings_v6', async () => {
+    const fromDb = await fetchConstructorsFromSupabase();
+    if (fromDb?.length) return fromDb;
 
-  // Fallback 1: Supabase views
-  try {
-    const { data, error } = await supabase.from('vw_constructor_standings').select('*').order('position', { ascending: true });
-    if (!error && data && data.length > 0) {
-      return data.map((c: any) => ({
-        pos: c.position,
-        name: c.team,
-        points: c.points,
-        color: resolveDriverColor(c.team),
-      }));
-    }
-  } catch (e) {
-    console.warn("[DB] Fallback constructor standings failed:", e);
-  }
+    const { constructors } = await getOpenF1StandingsShared();
+    if (constructors.length) return constructors;
 
-  // Fallback 2: Mock data
-  return mockConstructors.map(c => ({ ...c, color: resolveDriverColor(c.name) }));
+    throw new Error('No constructor standings available');
+  }, mockConstructors.map(c => ({ ...c, color: resolveDriverColor(c.name) })));
 }
 
 export async function fetchConstructorsChampionship(): Promise<Constructor[]> {

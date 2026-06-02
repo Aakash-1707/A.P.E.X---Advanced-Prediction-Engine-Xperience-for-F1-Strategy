@@ -1,23 +1,11 @@
 name: F1 2026 Prediction Pipeline
 
 # ──────────────────────────────────────────────────────────────────────
-#  What this workflow does
-#  ──────────────────────────────────────────────────────────────────────
-#  Runs ml_pipeline/run_pipeline.py, which trains the APEX V7 XGBoost
-#  predictor on all historical F1 data (via FastF1), computes 2026 race
-#  + qualifying predictions, and upserts them into Supabase.
+#  1. run_pipeline.py — APEX V7 predictions → Supabase
+#  2. sync_standings.py — OpenF1 race results → Supabase
+#     (feeds vw_driver_standings / vw_constructor_standings for Home + Grid)
 #
-#  Triggers
-#  ────────
-#  • workflow_dispatch  — manual "Run workflow" button (optionally pin
-#                         a single GP via the input)
-#  • schedule (weekly)  — Monday 06:00 UTC → refresh every GP
-#
-#  Required repository secrets (Settings → Secrets and variables →
-#  Actions → New repository secret):
-#
-#    SUPABASE_URL            https://<ref>.supabase.co
-#    SUPABASE_SERVICE_KEY    service_role key (keep this PRIVATE)
+#  Secrets: SUPABASE_URL, SUPABASE_SERVICE_KEY
 # ──────────────────────────────────────────────────────────────────────
 
 on:
@@ -33,13 +21,15 @@ on:
         required: false
         default: '0'
         type: string
+      standings_only:
+        description: 'Skip ML predictions; only sync driver/constructor points'
+        required: false
+        default: false
+        type: boolean
 
   schedule:
-    # Every Monday at 06:00 UTC — full calendar refresh
     - cron: '0 6 * * 1'
 
-# Only one pipeline run at a time so concurrent triggers don't race
-# when writing to Supabase.
 concurrency:
   group: f1-pipeline
   cancel-in-progress: false
@@ -47,10 +37,9 @@ concurrency:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # ~5 min for 24 GPs warm-cache, ~20-30 min cold
+    timeout-minutes: 60
 
     env:
-      # Avoid Intel OpenMP / MKL fork-safety warnings on CI runners.
       OMP_NUM_THREADS: '1'
       MKL_THREADING_LAYER: GNU
       KMP_INIT_AT_FORK: 'FALSE'
@@ -72,11 +61,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r ml_pipeline/requirements.txt
 
-      # ── FastF1 session cache ─────────────────────────────────────────
-      # Warm cache: full pipeline ≈ 5 min. Cold cache: 25–40 min.
-      # We restore the latest cache and save a fresh copy at the end of
-      # each run (keyed on run_id so we never collide).
       - name: Restore FastF1 cache
+        if: ${{ !inputs.standings_only }}
         id: cache-restore
         uses: actions/cache/restore@v4
         with:
@@ -86,6 +72,7 @@ jobs:
             fastf1-cache-v1-
 
       - name: Run pipeline
+        if: ${{ !inputs.standings_only }}
         working-directory: ml_pipeline
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
@@ -107,8 +94,16 @@ jobs:
             python run_pipeline.py --all --skip-fresh "$SKIP"
           fi
 
-      - name: Save FastF1 cache
+      - name: Sync championship standings
         if: always()
+        working-directory: ml_pipeline
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python sync_standings.py
+
+      - name: Save FastF1 cache
+        if: always() && !inputs.standings_only
         uses: actions/cache/save@v4
         with:
           path: ml_pipeline/f1_cache
@@ -121,4 +116,5 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **GP**: ${{ github.event.inputs.gp_name || '_all 24 GPs_' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Standings only**: ${{ inputs.standings_only }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY

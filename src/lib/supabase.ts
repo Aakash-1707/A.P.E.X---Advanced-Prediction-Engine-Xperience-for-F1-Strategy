@@ -1,13 +1,18 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl  = import.meta.env.VITE_SUPABASE_URL  as string;
-const supabaseKey  = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error(
-    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in your .env file.\n' +
-    'Copy .env.example to .env and fill in your Supabase project credentials.'
+export const supabaseConfigured = Boolean(supabaseUrl && supabaseKey);
+
+if (!supabaseConfigured) {
+  console.warn(
+    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.\n' +
+    'Standings will load from OpenF1 instead of Supabase.'
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+// Avoid placeholder URLs — they fail slowly and trigger stale mock fallbacks.
+export const supabase: SupabaseClient = supabaseConfigured
+  ? createClient(supabaseUrl!, supabaseKey!)
+  : createClient('https://invalid.local', 'invalid');
