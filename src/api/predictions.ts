@@ -177,37 +177,96 @@ export interface ActualResults {
 
 const OPENF1_URL = 'https://api.openf1.org/v1';
 
-async function loadSessionPositions(
+type OpenF1SessionRow = { session_key: number; session_name?: string };
+
+function setDriverPosition(target: Map<string, number>, abbr: string, position: number) {
+  target.set(abbr.toUpperCase(), position);
+}
+
+export function getDriverPosition(
+  map: Map<string, number>,
+  abbr: string,
+): number | undefined {
+  return map.get(abbr.toUpperCase());
+}
+
+/** Main-race qualifying session (not Sprint Qualifying on sprint weekends). */
+function pickQualifyingSession(sessions: OpenF1SessionRow[]): OpenF1SessionRow | null {
+  const main = sessions.find((s) => s.session_name === 'Qualifying');
+  if (main) return main;
+
+  return (
+    sessions.find((s) => /sprint qualifying|sprint shootout/i.test(s.session_name ?? '')) ??
+    null
+  );
+}
+
+async function buildDriverAbbrMap(sessionKey: number): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  const drvRes = await fetchT(`${OPENF1_URL}/drivers?session_key=${sessionKey}`, 12000);
+  if (!drvRes.ok) return map;
+
+  const drivers = await drvRes.json();
+  if (!Array.isArray(drivers)) return map;
+
+  for (const d of drivers) {
+    if (d.name_acronym && typeof d.driver_number === 'number') {
+      map.set(d.driver_number, String(d.name_acronym).toUpperCase());
+    }
+  }
+  return map;
+}
+
+function applyPositions(
+  rows: { driver_number?: number; position?: number; grid_position?: number }[],
+  abbrMap: Map<number, string>,
+  target: Map<string, number>,
+) {
+  for (const row of rows) {
+    if (typeof row.driver_number !== 'number') continue;
+    const abbr = abbrMap.get(row.driver_number);
+    const pos = row.position ?? row.grid_position;
+    if (abbr && typeof pos === 'number' && pos > 0) {
+      setDriverPosition(target, abbr, pos);
+    }
+  }
+}
+
+async function loadSessionResultPositions(
   sessionKey: number,
+  abbrMap: Map<number, string>,
   target: Map<string, number>,
 ): Promise<void> {
-  const [resRes, drvRes] = await Promise.all([
-    fetchT(`${OPENF1_URL}/session_result?session_key=${sessionKey}`, 12000),
-    fetchT(`${OPENF1_URL}/drivers?session_key=${sessionKey}`, 12000),
-  ]);
-
+  const resRes = await fetchT(`${OPENF1_URL}/session_result?session_key=${sessionKey}`, 12000);
   if (!resRes.ok) return;
 
   const results = await resRes.json();
-  const drivers = drvRes.ok ? await drvRes.json() : [];
   if (!Array.isArray(results)) return;
+  applyPositions(results, abbrMap, target);
+}
 
-  const abbrByNumber = new Map<number, string>();
-  if (Array.isArray(drivers)) {
-    for (const d of drivers) {
-      if (d.name_acronym && typeof d.driver_number === 'number') {
-        abbrByNumber.set(d.driver_number, d.name_acronym);
-      }
-    }
-  }
+async function loadStartingGridPositions(
+  sessionKey: number,
+  abbrMap: Map<number, string>,
+  target: Map<string, number>,
+): Promise<void> {
+  const gridRes = await fetchT(`${OPENF1_URL}/starting_grid?session_key=${sessionKey}`, 12000);
+  if (!gridRes.ok) return;
 
-  for (const row of results) {
-    const abbr = abbrByNumber.get(row.driver_number);
-    const pos = row.position;
-    if (abbr && typeof pos === 'number') {
-      target.set(abbr, pos);
-    }
-  }
+  const grid = await gridRes.json();
+  if (!Array.isArray(grid)) return;
+  applyPositions(grid, abbrMap, target);
+}
+
+async function loadQualifyingActuals(
+  qualiSession: OpenF1SessionRow,
+  abbrMap: Map<number, string>,
+  target: Map<string, number>,
+): Promise<void> {
+  const sk = qualiSession.session_key;
+  // starting_grid is often more complete than session_result for Qualifying
+  await loadStartingGridPositions(sk, abbrMap, target);
+  await loadSessionResultPositions(sk, abbrMap, target);
 }
 
 async function fetchActualResultsOpenF1(raceObj: Race): Promise<ActualResults> {
@@ -227,16 +286,18 @@ async function fetchActualResultsOpenF1(raceObj: Race): Promise<ActualResults> {
   const sessions = await sessionsRes.json();
   if (!Array.isArray(sessions)) return { race, quali };
 
-  const raceSession = sessions.find((s: { session_name?: string }) => s.session_name === 'Race');
-  const qualiSession = sessions.find((s: { session_name?: string }) => {
-    const name = s.session_name ?? '';
-    return name === 'Qualifying' || /sprint qualifying/i.test(name);
-  });
+  const raceSession = sessions.find((s: OpenF1SessionRow) => s.session_name === 'Race');
+  const qualiSession = pickQualifyingSession(sessions);
 
-  await Promise.all([
-    raceSession ? loadSessionPositions(raceSession.session_key, race) : Promise.resolve(),
-    qualiSession ? loadSessionPositions(qualiSession.session_key, quali) : Promise.resolve(),
-  ]);
+  if (!raceSession) return { race, quali };
+
+  const abbrMap = await buildDriverAbbrMap(raceSession.session_key);
+
+  await loadSessionResultPositions(raceSession.session_key, abbrMap, race);
+
+  if (qualiSession) {
+    await loadQualifyingActuals(qualiSession, abbrMap, quali);
+  }
 
   return { race, quali };
 }
@@ -298,11 +359,11 @@ export async function fetchPredictionsForRace(
   if (actuals) {
     raceItems = raceItems.map((item) => ({
       ...item,
-      actualPosition: actuals.race.get(item.driver),
+      actualPosition: getDriverPosition(actuals.race, item.driver),
     }));
     qualiItems = qualiItems.map((item) => ({
       ...item,
-      actualPosition: actuals.quali.get(item.driver),
+      actualPosition: getDriverPosition(actuals.quali, item.driver),
     }));
   }
 
