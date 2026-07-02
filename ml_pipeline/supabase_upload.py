@@ -43,32 +43,11 @@ except ImportError:
 #  (mirrors the frontend's expectations so the Supabase `country` and
 #   `round` columns can be used for filtering / joins if needed)
 # ─────────────────────────────────────────────────────────────────────
-GP_COUNTRY: dict[str, str] = {
-    "Australian Grand Prix":      "Australia",
-    "Chinese Grand Prix":         "China",
-    "Japanese Grand Prix":        "Japan",
-    "Bahrain Grand Prix":         "Bahrain",
-    "Saudi Arabian Grand Prix":   "Saudi Arabia",
-    "Miami Grand Prix":           "USA",
-    "Emilia Romagna Grand Prix":  "Italy",
-    "Monaco Grand Prix":          "Monaco",
-    "Spanish Grand Prix":         "Spain",
-    "Canadian Grand Prix":        "Canada",
-    "Austrian Grand Prix":        "Austria",
-    "British Grand Prix":         "UK",
-    "Belgian Grand Prix":         "Belgium",
-    "Hungarian Grand Prix":       "Hungary",
-    "Dutch Grand Prix":           "Netherlands",
-    "Italian Grand Prix":         "Italy",
-    "Azerbaijan Grand Prix":      "Azerbaijan",
-    "Singapore Grand Prix":       "Singapore",
-    "United States Grand Prix":   "USA",
-    "Mexican Grand Prix":         "Mexico",
-    "Brazilian Grand Prix":       "Brazil",
-    "Las Vegas Grand Prix":       "USA",
-    "Qatar Grand Prix":           "Qatar",
-    "Abu Dhabi Grand Prix":       "Abu Dhabi",
-}
+try:
+    from gp_registry import get_grand_prix_entries
+    GP_COUNTRY = {gp["predictor_name"]: gp["country"] for gp in get_grand_prix_entries()}
+except ImportError:
+    GP_COUNTRY = {}
 
 def _gp_round(gp_name: str) -> Optional[int]:
     if gp_name in ALL_2026_GPS_ORDERED:

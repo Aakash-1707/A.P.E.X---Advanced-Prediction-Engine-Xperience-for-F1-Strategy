@@ -44,6 +44,7 @@ except ImportError:
     print("ERROR: f1_2026_predictor.py not importable from this directory.")
     sys.exit(1)
 
+from gp_registry import resolve_predictor_name, list_gps_for_cli, latest_completed_predictor_gp, print_openf1_calendar
 from supabase_upload import upload_predictions, get_client
 
 
@@ -116,6 +117,10 @@ Examples:
                         help="Run every 2026 Grand Prix in order")
     parser.add_argument("--list",        action="store_true",
                         help="List all 2026 GP names")
+    parser.add_argument("--openf1-calendar", action="store_true",
+                        help="Show OpenF1 meeting names mapped to predictor names")
+    parser.add_argument("--latest-race", action="store_true",
+                        help="Run predictions for the most recent GP with OpenF1 race results")
     parser.add_argument("--skip-fresh",  type=int, default=0, metavar="HOURS",
                         help="With --all: skip GPs whose rows were updated within N hours")
     parser.add_argument("--continue-on-error", action="store_true", default=True,
@@ -123,17 +128,33 @@ Examples:
     args = parser.parse_args()
 
     if args.list:
-        print("\n  2026 Formula 1 Calendar:\n")
-        for i, gp in enumerate(ALL_2026_GPS_ORDERED, 1):
-            print(f"  {i:2}. {gp}")
+        list_gps_for_cli()
+        sys.exit(0)
+
+    if args.openf1_calendar:
+        print_openf1_calendar()
+        sys.exit(0)
+
+    if args.latest_race:
+        gp = latest_completed_predictor_gp()
+        if not gp:
+            print("ERROR: no completed 2026 race found on OpenF1.")
+            sys.exit(1)
+        print(f"  ℹ  Latest completed GP on OpenF1: {gp}")
+        run_for_gp(gp)
+        print("\n  ✅  Done\n")
         sys.exit(0)
 
     # ── single GP ─────────────────────────────────────────────────────
     if args.gp:
-        if args.gp not in ALL_2026_GPS_ORDERED:
-            print(f"ERROR: unknown GP '{args.gp}'. Use --list to see valid names.")
+        resolved = resolve_predictor_name(args.gp)
+        if not resolved:
+            print(f"ERROR: could not resolve GP '{args.gp}'.")
+            print("  Use --list to see canonical names, OpenF1 names, and aliases.")
             sys.exit(1)
-        run_for_gp(args.gp)
+        if resolved != args.gp.strip():
+            print(f"  ℹ  Resolved '{args.gp}' → '{resolved}'")
+        run_for_gp(resolved)
         print("\n  ✅  Done\n")
         sys.exit(0)
 

@@ -53,6 +53,7 @@ from f1_2026_predictor import (
     ALL_2026_GPS_ORDERED,
     get_circuit_params,
 )
+from gp_registry import resolve_predictor_name
 
 # ─────────────────────────────────────────────────────────────────────
 #  CONFIG
@@ -236,11 +237,11 @@ def list_gps():
 
 @app.post("/predict", response_model=JobResponse, summary="Kick off a prediction")
 def submit_prediction(req: PredictRequest):
-    gp = req.gp.strip()
+    gp = resolve_predictor_name(req.gp.strip()) or req.gp.strip()
     if gp not in ALL_2026_GPS_ORDERED:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown GP '{gp}'. Call /gps for valid options.",
+            detail=f"Unknown GP '{req.gp}'. Call /gps for valid options.",
         )
 
     # Hit cache?

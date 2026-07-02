@@ -12,7 +12,10 @@ on:
   workflow_dispatch:
     inputs:
       gp_name:
-        description: 'Grand Prix name (leave blank to run ALL 24 GPs)'
+        description: >-
+          Grand Prix name or alias (e.g. "Barcelona Grand Prix", "Mexico City Grand Prix",
+          "Madring", "São Paulo", or "latest" for the most recent completed race).
+          Leave blank to run all 24 GPs.
         required: false
         default: ''
         type: string
@@ -89,7 +92,14 @@ jobs:
           echo "─────────────────────────────────────────────"
 
           if [ -n "$GP" ]; then
-            python run_pipeline.py --gp "$GP"
+            case "$GP" in
+              latest|LATEST|__latest__)
+                python run_pipeline.py --latest-race
+                ;;
+              *)
+                python run_pipeline.py --gp "$GP"
+                ;;
+            esac
           else
             python run_pipeline.py --all --skip-fresh "$SKIP"
           fi

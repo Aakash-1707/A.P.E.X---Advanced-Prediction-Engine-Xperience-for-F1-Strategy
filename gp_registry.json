@@ -1,0 +1,212 @@
+{
+  "season": 2026,
+  "grand_prix": [
+    {
+      "id": "australian",
+      "predictor_name": "Australian Grand Prix",
+      "openf1_names": ["Australian Grand Prix"],
+      "aliases": ["Australia GP", "Melbourne"],
+      "fastf1_historical_names": ["Australian Grand Prix"],
+      "country": "Australia"
+    },
+    {
+      "id": "chinese",
+      "predictor_name": "Chinese Grand Prix",
+      "openf1_names": ["Chinese Grand Prix"],
+      "aliases": ["China GP", "Shanghai"],
+      "fastf1_historical_names": ["Chinese Grand Prix"],
+      "country": "China"
+    },
+    {
+      "id": "japanese",
+      "predictor_name": "Japanese Grand Prix",
+      "openf1_names": ["Japanese Grand Prix"],
+      "aliases": ["Japan GP", "Suzuka"],
+      "fastf1_historical_names": ["Japanese Grand Prix"],
+      "country": "Japan"
+    },
+    {
+      "id": "bahrain",
+      "predictor_name": "Bahrain Grand Prix",
+      "openf1_names": ["Bahrain Grand Prix"],
+      "aliases": ["Sakhir"],
+      "fastf1_historical_names": ["Bahrain Grand Prix"],
+      "country": "Bahrain"
+    },
+    {
+      "id": "saudi",
+      "predictor_name": "Saudi Arabian Grand Prix",
+      "openf1_names": ["Saudi Arabian Grand Prix"],
+      "aliases": ["Saudi Arabia GP", "Jeddah"],
+      "fastf1_historical_names": ["Saudi Arabian Grand Prix"],
+      "country": "Saudi Arabia"
+    },
+    {
+      "id": "miami",
+      "predictor_name": "Miami Grand Prix",
+      "openf1_names": ["Miami Grand Prix"],
+      "aliases": ["Miami GP"],
+      "fastf1_historical_names": ["Miami Grand Prix"],
+      "country": "United States"
+    },
+    {
+      "id": "canadian",
+      "predictor_name": "Canadian Grand Prix",
+      "openf1_names": ["Canadian Grand Prix"],
+      "aliases": ["Canada GP", "Montreal"],
+      "fastf1_historical_names": ["Canadian Grand Prix"],
+      "country": "Canada"
+    },
+    {
+      "id": "monaco",
+      "predictor_name": "Monaco Grand Prix",
+      "openf1_names": ["Monaco Grand Prix"],
+      "aliases": ["Monte Carlo"],
+      "fastf1_historical_names": ["Monaco Grand Prix"],
+      "country": "Monaco"
+    },
+    {
+      "id": "barcelona",
+      "predictor_name": "Barcelona Grand Prix",
+      "openf1_names": ["Barcelona Grand Prix"],
+      "aliases": [
+        "Catalunya",
+        "Catalunya Barcelona",
+        "Barcelona-Catalunya",
+        "Spanish GP Catalunya",
+        "Gran Premio de Catalunya"
+      ],
+      "fastf1_historical_names": ["Spanish Grand Prix"],
+      "fastf1_2026_names": ["Barcelona Grand Prix"],
+      "country": "Spain",
+      "circuit": "Catalunya"
+    },
+    {
+      "id": "austrian",
+      "predictor_name": "Austrian Grand Prix",
+      "openf1_names": ["Austrian Grand Prix"],
+      "aliases": ["Austria GP", "Spielberg", "Red Bull Ring"],
+      "fastf1_historical_names": ["Austrian Grand Prix"],
+      "country": "Austria"
+    },
+    {
+      "id": "british",
+      "predictor_name": "British Grand Prix",
+      "openf1_names": ["British Grand Prix"],
+      "aliases": ["UK GP", "Silverstone", "Great Britain"],
+      "fastf1_historical_names": ["British Grand Prix"],
+      "country": "United Kingdom"
+    },
+    {
+      "id": "belgian",
+      "predictor_name": "Belgian Grand Prix",
+      "openf1_names": ["Belgian Grand Prix"],
+      "aliases": ["Belgium GP", "Spa"],
+      "fastf1_historical_names": ["Belgian Grand Prix"],
+      "country": "Belgium"
+    },
+    {
+      "id": "hungarian",
+      "predictor_name": "Hungarian Grand Prix",
+      "openf1_names": ["Hungarian Grand Prix"],
+      "aliases": ["Hungary GP", "Hungaroring"],
+      "fastf1_historical_names": ["Hungarian Grand Prix"],
+      "country": "Hungary"
+    },
+    {
+      "id": "dutch",
+      "predictor_name": "Dutch Grand Prix",
+      "openf1_names": ["Dutch Grand Prix"],
+      "aliases": ["Netherlands GP", "Zandvoort"],
+      "fastf1_historical_names": ["Dutch Grand Prix"],
+      "country": "Netherlands"
+    },
+    {
+      "id": "italian",
+      "predictor_name": "Italian Grand Prix",
+      "openf1_names": ["Italian Grand Prix"],
+      "aliases": ["Italy GP", "Monza"],
+      "fastf1_historical_names": ["Italian Grand Prix"],
+      "country": "Italy"
+    },
+    {
+      "id": "spanish_madrid",
+      "predictor_name": "Spanish Grand Prix",
+      "openf1_names": ["Spanish Grand Prix"],
+      "aliases": [
+        "Madrid Grand Prix",
+        "Madring",
+        "Madrid Spanish Grand Prix",
+        "Spanish GP Madrid"
+      ],
+      "fastf1_historical_names": [],
+      "fastf1_2026_names": ["Spanish Grand Prix"],
+      "country": "Spain",
+      "circuit": "Madring"
+    },
+    {
+      "id": "azerbaijan",
+      "predictor_name": "Azerbaijan Grand Prix",
+      "openf1_names": ["Azerbaijan Grand Prix"],
+      "aliases": ["Baku"],
+      "fastf1_historical_names": ["Azerbaijan Grand Prix"],
+      "country": "Azerbaijan"
+    },
+    {
+      "id": "singapore",
+      "predictor_name": "Singapore Grand Prix",
+      "openf1_names": ["Singapore Grand Prix"],
+      "aliases": ["Singapore GP"],
+      "fastf1_historical_names": ["Singapore Grand Prix"],
+      "country": "Singapore"
+    },
+    {
+      "id": "united_states",
+      "predictor_name": "United States Grand Prix",
+      "openf1_names": ["United States Grand Prix"],
+      "aliases": ["US GP", "USA GP", "Austin", "COTA"],
+      "fastf1_historical_names": ["United States Grand Prix"],
+      "country": "United States"
+    },
+    {
+      "id": "mexican",
+      "predictor_name": "Mexican Grand Prix",
+      "openf1_names": ["Mexico City Grand Prix", "Mexican Grand Prix"],
+      "aliases": ["Mexico GP", "Mexico City"],
+      "fastf1_historical_names": ["Mexico City Grand Prix", "Mexican Grand Prix"],
+      "country": "Mexico"
+    },
+    {
+      "id": "brazilian",
+      "predictor_name": "Brazilian Grand Prix",
+      "openf1_names": ["São Paulo Grand Prix", "Sao Paulo Grand Prix", "Brazilian Grand Prix"],
+      "aliases": ["Brazil GP", "São Paulo", "Sao Paulo", "Interlagos"],
+      "fastf1_historical_names": ["São Paulo Grand Prix", "Brazilian Grand Prix"],
+      "country": "Brazil"
+    },
+    {
+      "id": "las_vegas",
+      "predictor_name": "Las Vegas Grand Prix",
+      "openf1_names": ["Las Vegas Grand Prix"],
+      "aliases": ["Vegas GP"],
+      "fastf1_historical_names": ["Las Vegas Grand Prix"],
+      "country": "United States"
+    },
+    {
+      "id": "qatar",
+      "predictor_name": "Qatar Grand Prix",
+      "openf1_names": ["Qatar Grand Prix"],
+      "aliases": ["Lusail"],
+      "fastf1_historical_names": ["Qatar Grand Prix"],
+      "country": "Qatar"
+    },
+    {
+      "id": "abu_dhabi",
+      "predictor_name": "Abu Dhabi Grand Prix",
+      "openf1_names": ["Abu Dhabi Grand Prix"],
+      "aliases": ["Yas Marina", "UAE GP"],
+      "fastf1_historical_names": ["Abu Dhabi Grand Prix"],
+      "country": "United Arab Emirates"
+    }
+  ]
+}

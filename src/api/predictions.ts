@@ -1,7 +1,10 @@
 // F1 2026 predictions client (Supabase-backed).
 import { Race, teamColors } from '../data/mock';
+import { resolvePredictorGpName } from '../data/gp-registry';
 import { supabase } from '../lib/supabase';
 import { fetchT } from './f1';
+
+export { resolvePredictorGpName };
 
 export interface RacePredictionRow {
   gp_name: string;
@@ -113,58 +116,6 @@ export function qualiPredictionsToItems(
       q3Hint: r.q3_pct ?? undefined,
       predictedPosition: r.predicted_grid ?? undefined,
     }));
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  GP-name mapping:  Race (from OpenF1)  →  full "XYZ Grand Prix"
-//
-//  The predictor API uses canonical names like "Japanese Grand Prix".
-//  OpenF1 meeting names can vary (e.g. "Japanese Grand Prix", "Italian
-//  Grand Prix", "Las Vegas Grand Prix"), and some calendar events
-//  include things like "São Paulo Grand Prix" ≈ "Brazilian Grand Prix".
-// ─────────────────────────────────────────────────────────────────────
-const OPENF1_TO_PREDICTOR: Record<string, string> = {
-  'São Paulo Grand Prix':    'Brazilian Grand Prix',
-  'Sao Paulo Grand Prix':    'Brazilian Grand Prix',
-  'Grande Prêmio de São Paulo': 'Brazilian Grand Prix',
-};
-
-const COUNTRY_TO_PREDICTOR: Record<string, string> = {
-  'Australia':          'Australian Grand Prix',
-  'China':              'Chinese Grand Prix',
-  'Japan':              'Japanese Grand Prix',
-  'Bahrain':            'Bahrain Grand Prix',
-  'Saudi Arabia':       'Saudi Arabian Grand Prix',
-  'USA':                'United States Grand Prix',
-  'United States':      'United States Grand Prix',
-  'Italy':              'Italian Grand Prix',  // Imola is also Italy → must override via event name
-  'Monaco':             'Monaco Grand Prix',
-  'Spain':              'Spanish Grand Prix',
-  'Canada':             'Canadian Grand Prix',
-  'Austria':            'Austrian Grand Prix',
-  'UK':                 'British Grand Prix',
-  'United Kingdom':     'British Grand Prix',
-  'Hungary':            'Hungarian Grand Prix',
-  'Belgium':            'Belgian Grand Prix',
-  'Netherlands':        'Dutch Grand Prix',
-  'Azerbaijan':         'Azerbaijan Grand Prix',
-  'Singapore':          'Singapore Grand Prix',
-  'Mexico':             'Mexican Grand Prix',
-  'Brazil':             'Brazilian Grand Prix',
-  'Qatar':              'Qatar Grand Prix',
-  'UAE':                'Abu Dhabi Grand Prix',
-  'Abu Dhabi':          'Abu Dhabi Grand Prix',
-  'United Arab Emirates': 'Abu Dhabi Grand Prix',
-};
-
-export function resolvePredictorGpName(race: Race): string {
-  if (OPENF1_TO_PREDICTOR[race.name]) return OPENF1_TO_PREDICTOR[race.name];
-  if (/emilia[\s-]*romagna/i.test(race.name) || /imola/i.test(race.name))
-    return 'Emilia Romagna Grand Prix';
-  if (/miami/i.test(race.name))                return 'Miami Grand Prix';
-  if (/las vegas/i.test(race.name))            return 'Las Vegas Grand Prix';
-  if (race.name.toLowerCase().endsWith('grand prix')) return race.name;
-  return COUNTRY_TO_PREDICTOR[race.country] ?? race.name;
 }
 
 // ─────────────────────────────────────────────────────────────────────

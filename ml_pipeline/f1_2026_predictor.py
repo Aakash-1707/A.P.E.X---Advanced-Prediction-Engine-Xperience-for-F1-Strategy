@@ -51,7 +51,8 @@ CIRCUIT_DB = {
     "Saudi Arabian Grand Prix": {"laps": 50, "overtake_idx": 0.06, "lap_time_range": (88, 96), "typical_race_pace_offset": 1.2},
     "Japanese Grand Prix": {"laps": 53, "overtake_idx": 0.05, "lap_time_range": (88, 98), "typical_race_pace_offset": 1.5},
     "Hungarian Grand Prix": {"laps": 70, "overtake_idx": 0.04, "lap_time_range": (75, 84), "typical_race_pace_offset": 1.4},
-    "Spanish Grand Prix": {"laps": 66, "overtake_idx": 0.06, "lap_time_range": (76, 84), "typical_race_pace_offset": 1.4},
+    "Spanish Grand Prix": {"laps": 54, "overtake_idx": 0.09, "lap_time_range": (95, 112), "typical_race_pace_offset": 1.4},
+    "Barcelona Grand Prix": {"laps": 66, "overtake_idx": 0.06, "lap_time_range": (76, 84), "typical_race_pace_offset": 1.4},
     "British Grand Prix": {"laps": 52, "overtake_idx": 0.09, "lap_time_range": (85, 95), "typical_race_pace_offset": 1.5},
     "Austrian Grand Prix": {"laps": 71, "overtake_idx": 0.10, "lap_time_range": (62, 70), "typical_race_pace_offset": 1.3},
     "Dutch Grand Prix": {"laps": 72, "overtake_idx": 0.04, "lap_time_range": (70, 78), "typical_race_pace_offset": 1.3},
@@ -70,16 +71,21 @@ CIRCUIT_DB = {
 }
 DEFAULT_CIRCUIT = {"laps": 55, "overtake_idx": 0.08, "lap_time_range": (85, 100), "typical_race_pace_offset": 1.5}
 
-ALL_2026_GPS_ORDERED = [
-    "Australian Grand Prix", "Chinese Grand Prix", "Japanese Grand Prix",
-    "Bahrain Grand Prix", "Saudi Arabian Grand Prix", "Miami Grand Prix",
-    "Emilia Romagna Grand Prix", "Monaco Grand Prix", "Spanish Grand Prix",
-    "Canadian Grand Prix", "Austrian Grand Prix", "British Grand Prix",
-    "Belgian Grand Prix", "Hungarian Grand Prix", "Dutch Grand Prix",
-    "Italian Grand Prix", "Azerbaijan Grand Prix", "Singapore Grand Prix",
-    "United States Grand Prix", "Mexican Grand Prix", "Brazilian Grand Prix",
-    "Las Vegas Grand Prix", "Qatar Grand Prix", "Abu Dhabi Grand Prix",
-]
+try:
+    from gp_registry import get_ordered_predictor_names, resolve_fastf1_event_name
+    ALL_2026_GPS_ORDERED = get_ordered_predictor_names()
+except ImportError:
+    ALL_2026_GPS_ORDERED = [
+        "Australian Grand Prix", "Chinese Grand Prix", "Japanese Grand Prix",
+        "Bahrain Grand Prix", "Saudi Arabian Grand Prix", "Miami Grand Prix",
+        "Canadian Grand Prix", "Monaco Grand Prix", "Barcelona Grand Prix",
+        "Austrian Grand Prix", "British Grand Prix", "Belgian Grand Prix",
+        "Hungarian Grand Prix", "Dutch Grand Prix", "Italian Grand Prix",
+        "Spanish Grand Prix", "Azerbaijan Grand Prix", "Singapore Grand Prix",
+        "United States Grand Prix", "Mexican Grand Prix", "Brazilian Grand Prix",
+        "Las Vegas Grand Prix", "Qatar Grand Prix", "Abu Dhabi Grand Prix",
+    ]
+    resolve_fastf1_event_name = None  # type: ignore
 # Alias used by run_pipeline.py / api.py
 ALL_2026_GPS = ALL_2026_GPS_ORDERED
 
@@ -149,6 +155,22 @@ def banner(t):
 def _norm_event_name(name):
     return "".join(ch.lower() for ch in str(name) if ch.isalnum())
 
+def _fastf1_event_name(target_gp: str, year: int) -> str | None:
+    try:
+        schedule = fastf1.get_event_schedule(year, include_testing=False)
+        event_names = schedule["EventName"].astype(str).tolist()
+        if resolve_fastf1_event_name is not None:
+            hit = resolve_fastf1_event_name(target_gp, year, event_names)
+            if hit:
+                return hit
+        target_norm = _norm_event_name(target_gp)
+        for name in event_names:
+            if _norm_event_name(name) == target_norm:
+                return name
+    except Exception:
+        pass
+    return None
+
 def get_circuit_params(gp_name):
     if gp_name in CIRCUIT_DB: return CIRCUIT_DB[gp_name]
     gp_lower = gp_name.lower()
@@ -178,11 +200,7 @@ def load_historical(gp_name, prior_gps_2026, progress=None):
         if progress:
             progress(f"Loading {year} {target_gp}", 10 + int(40 * idx / max(total, 1)))
         try:
-            schedule = fastf1.get_event_schedule(year, include_testing=False)
-            target_norm = _norm_event_name(target_gp)
-            event_names = schedule["EventName"].astype(str)
-            matches = event_names[event_names.map(_norm_event_name) == target_norm]
-            event_name = str(matches.iloc[0]) if not matches.empty else None
+            event_name = _fastf1_event_name(target_gp, year)
         except: event_name = None
 
         if event_name is None:
@@ -729,7 +747,8 @@ def compare_race(predictions, gp_name):
 
     actual_map = {}
     try:
-        s = fastf1.get_session(2026, gp_name, "R")
+        event_name = _fastf1_event_name(gp_name, 2026) or gp_name
+        s = fastf1.get_session(2026, event_name, "R")
         s.load(telemetry=False, weather=False, messages=False)
         for _, row in s.results.iterrows():
             abbr = safe(row, "Abbreviation", str(safe(row, "DriverNumber", "")))
@@ -779,7 +798,8 @@ def compare_quali(quali_pred, gp_name):
 
     actual_map = {}
     try:
-        sq = fastf1.get_session(2026, gp_name, "Q")
+        event_name = _fastf1_event_name(gp_name, 2026) or gp_name
+        sq = fastf1.get_session(2026, event_name, "Q")
         sq.load(telemetry=False, weather=False, messages=False)
         for _, row in sq.results.iterrows():
             abbr = safe(row, "Abbreviation", "")

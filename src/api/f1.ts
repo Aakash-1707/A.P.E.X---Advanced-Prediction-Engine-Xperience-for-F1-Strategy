@@ -363,17 +363,12 @@ async function fetchConstructorsFromSupabase(): Promise<Constructor[] | null> {
 
 const STANDINGS_CACHE_TTL = 10 * 60 * 1000; // 10 min — avoid stale points for days
 
-function isDbStandingsStale(db: Driver[], live: Driver[]): boolean {
-  if (!db.length || !live.length) return false;
-  return (live[0]?.points ?? 0) > (db[0]?.points ?? 0);
-}
-
 async function fetchChampionshipStandings(): Promise<{
   drivers: Driver[];
   constructors: Constructor[];
 }> {
   return fetchWithCache(
-    'f1_championship_standings_v7',
+    'f1_championship_standings_v8',
     async () => {
       const [fromDbDrivers, fromDbConstructors, live] = await Promise.all([
         fetchDriversFromSupabase(),
@@ -387,19 +382,18 @@ async function fetchChampionshipStandings(): Promise<{
       const liveDrivers = live?.drivers ?? [];
       const liveConstructors = live?.constructors ?? [];
 
-      if (
-        liveDrivers.length &&
-        (!fromDbDrivers?.length || isDbStandingsStale(fromDbDrivers, liveDrivers))
-      ) {
-        return { drivers: liveDrivers, constructors: liveConstructors };
+      // Always prefer live OpenF1 when available — DB can lag after a race weekend.
+      if (liveDrivers.length) {
+        return {
+          drivers: liveDrivers,
+          constructors: liveConstructors.length
+            ? liveConstructors
+            : (fromDbConstructors ?? []),
+        };
       }
 
       if (fromDbDrivers?.length && fromDbConstructors?.length) {
         return { drivers: fromDbDrivers, constructors: fromDbConstructors };
-      }
-
-      if (liveDrivers.length) {
-        return { drivers: liveDrivers, constructors: liveConstructors };
       }
 
       throw new Error('No championship standings available');
