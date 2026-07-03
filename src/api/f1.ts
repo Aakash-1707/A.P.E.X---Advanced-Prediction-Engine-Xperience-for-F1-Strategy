@@ -191,7 +191,7 @@ const STANDINGS_YEAR = 2026;
 
 async function pickStandingsYear(): Promise<{ year: number; sessions: any[] } | null> {
   try {
-    const r = await fetchT(`${OPENF1_URL}/sessions?year=${STANDINGS_YEAR}`);
+    const r = await fetchT(`${OPENF1_URL}/sessions?year=${STANDINGS_YEAR}`, 15000);
     if (!r.ok) return null;
     const sessions = await r.json();
     if (!Array.isArray(sessions) || sessions.length === 0) return null;
@@ -199,6 +199,26 @@ async function pickStandingsYear(): Promise<{ year: number; sessions: any[] } | 
   } catch (_) {
     return null;
   }
+}
+
+async function fetchOpenF1StandingsWithRetry(): Promise<{ drivers: Driver[]; constructors: Constructor[] } | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await fetchOpenF1Standings();
+    } catch (e) {
+      console.warn(`[Standings] OpenF1 attempt ${attempt + 1} failed:`, e);
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+      }
+    }
+  }
+  return null;
+}
+
+function isMockStandings(drivers: Driver[]): boolean {
+  // Hardcoded 2024-style mock safety net (e.g. VER 374) — never treat as live.
+  const ver = drivers.find((d) => d.abbr === 'VER' || d.name.includes('Verstappen'));
+  return Boolean(ver && ver.points >= 300);
 }
 
 // Returns fully-ranked drivers and constructors for the current season.
@@ -224,15 +244,21 @@ async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors
     throw new Error('No scoring sessions for standings');
   }
 
-  // Bulk fetch (~2 requests) instead of 2× per session (was 60+ calls, very slow).
-  const keysParam = raceSessions.map((s: any) => `session_key=${s.session_key}`).join('&');
-  const [rRes, rDrv] = await Promise.all([
-    fetchT(`${OPENF1_URL}/session_result?${keysParam}`, 20000),
-    fetchT(`${OPENF1_URL}/drivers?${keysParam}`, 20000),
-  ]);
+  // Chunk bulk fetches — one huge URL can time out on slow/mobile networks.
+  const CHUNK = 8;
+  const results: any[] = [];
+  const rosterRaw: any[] = [];
 
-  const results: any[] = rRes.ok ? await rRes.json() : [];
-  const rosterRaw: any[] = rDrv.ok ? await rDrv.json() : [];
+  for (let i = 0; i < raceSessions.length; i += CHUNK) {
+    const chunk = raceSessions.slice(i, i + CHUNK);
+    const keysParam = chunk.map((s: any) => `session_key=${s.session_key}`).join('&');
+    const [rRes, rDrv] = await Promise.all([
+      fetchT(`${OPENF1_URL}/session_result?${keysParam}`, 30000),
+      fetchT(`${OPENF1_URL}/drivers?${keysParam}`, 30000),
+    ]);
+    if (rRes.ok) results.push(...(await rRes.json()));
+    if (rDrv.ok) rosterRaw.push(...(await rDrv.json()));
+  }
 
   const rosterBySession = new Map<number, Map<number, any>>();
   for (const r of rosterRaw) {
@@ -292,18 +318,6 @@ async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors
   return { drivers, constructors };
 }
 
-// Home/Grid load drivers + constructors in parallel — share one OpenF1 fetch.
-let openF1StandingsInflight: ReturnType<typeof fetchOpenF1Standings> | null = null;
-
-function getOpenF1StandingsShared() {
-  if (!openF1StandingsInflight) {
-    openF1StandingsInflight = fetchOpenF1Standings().finally(() => {
-      openF1StandingsInflight = null;
-    });
-  }
-  return openF1StandingsInflight;
-}
-
 const DRIVER_NUMBERS: Record<string, number> = {
   NOR: 1, VER: 3, BOR: 5, HAD: 6, GAS: 10, PER: 11, ANT: 12, ALO: 14,
   LEC: 16, STR: 18, ALB: 23, HUL: 27, LAW: 30, OCO: 31, LIN: 41, COL: 43,
@@ -361,46 +375,77 @@ async function fetchConstructorsFromSupabase(): Promise<Constructor[] | null> {
   return mapSupabaseConstructors(data);
 }
 
-const STANDINGS_CACHE_TTL = 10 * 60 * 1000; // 10 min — avoid stale points for days
+const STANDINGS_CACHE_TTL = 10 * 60 * 1000; // 10 min
+const STANDINGS_CACHE_KEY = 'f1_championship_standings_v9';
+
+type CachedStandings = {
+  drivers: Driver[];
+  constructors: Constructor[];
+  source: 'openf1' | 'supabase';
+  timestamp: number;
+};
 
 async function fetchChampionshipStandings(): Promise<{
   drivers: Driver[];
   constructors: Constructor[];
 }> {
-  return fetchWithCache(
-    'f1_championship_standings_v8',
-    async () => {
-      const [fromDbDrivers, fromDbConstructors, live] = await Promise.all([
-        fetchDriversFromSupabase(),
-        fetchConstructorsFromSupabase(),
-        getOpenF1StandingsShared().catch((e) => {
-          console.warn('[Standings] OpenF1 fetch failed:', e);
-          return null;
-        }),
-      ]);
-
-      const liveDrivers = live?.drivers ?? [];
-      const liveConstructors = live?.constructors ?? [];
-
-      // Always prefer live OpenF1 when available — DB can lag after a race weekend.
-      if (liveDrivers.length) {
-        return {
-          drivers: liveDrivers,
-          constructors: liveConstructors.length
-            ? liveConstructors
-            : (fromDbConstructors ?? []),
-        };
+  // Only reuse cache when it came from a successful OpenF1 fetch.
+  try {
+    const hit = localStorage.getItem(STANDINGS_CACHE_KEY);
+    if (hit) {
+      const cached: CachedStandings = JSON.parse(hit);
+      if (
+        cached.source === 'openf1' &&
+        Date.now() - cached.timestamp < STANDINGS_CACHE_TTL &&
+        cached.drivers?.length &&
+        !isMockStandings(cached.drivers)
+      ) {
+        console.log('[Standings] Serving cached OpenF1 standings');
+        return { drivers: cached.drivers, constructors: cached.constructors };
       }
+    }
+  } catch (e) {
+    console.warn('[Standings] cache read error', e);
+  }
 
-      if (fromDbDrivers?.length && fromDbConstructors?.length) {
-        return { drivers: fromDbDrivers, constructors: fromDbConstructors };
-      }
+  const [fromDbDrivers, fromDbConstructors, live] = await Promise.all([
+    fetchDriversFromSupabase(),
+    fetchConstructorsFromSupabase(),
+    fetchOpenF1StandingsWithRetry(),
+  ]);
 
-      throw new Error('No championship standings available');
-    },
-    { drivers: mockDrivers, constructors: mockConstructors.map(c => ({ ...c, color: resolveDriverColor(c.name) })) },
-    STANDINGS_CACHE_TTL,
-  );
+  const liveDrivers = live?.drivers ?? [];
+  const liveConstructors = live?.constructors ?? [];
+
+  if (liveDrivers.length && !isMockStandings(liveDrivers)) {
+    console.log('[Standings] Using live OpenF1');
+    const payload: CachedStandings = {
+      drivers: liveDrivers,
+      constructors: liveConstructors.length
+        ? liveConstructors
+        : (fromDbConstructors ?? []),
+      source: 'openf1',
+      timestamp: Date.now(),
+    };
+    try {
+      localStorage.setItem(STANDINGS_CACHE_KEY, JSON.stringify(payload));
+    } catch (e) {
+      console.warn('[Standings] cache write error', e);
+    }
+    return { drivers: payload.drivers, constructors: payload.constructors };
+  }
+
+  if (fromDbDrivers?.length && fromDbConstructors?.length) {
+    console.warn('[Standings] OpenF1 unavailable — using Supabase (run sync_standings workflow to refresh)');
+    return { drivers: fromDbDrivers, constructors: fromDbConstructors };
+  }
+
+  // Last resort: mock data (should be rare).
+  console.warn('[Standings] Using mock fallback — check network / OpenF1 availability');
+  return {
+    drivers: mockDrivers,
+    constructors: mockConstructors.map((c) => ({ ...c, color: resolveDriverColor(c.name) })),
+  };
 }
 
 export async function fetchAllDrivers(): Promise<Driver[]> {
