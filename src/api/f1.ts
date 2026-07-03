@@ -201,7 +201,11 @@ async function pickStandingsYear(): Promise<{ year: number; sessions: any[] } | 
   }
 }
 
-async function fetchOpenF1StandingsWithRetry(): Promise<{ drivers: Driver[]; constructors: Constructor[] } | null> {
+async function fetchOpenF1StandingsWithRetry(): Promise<{
+  drivers: Driver[];
+  constructors: Constructor[];
+  completedRaceCount: number;
+} | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       return await fetchOpenF1Standings();
@@ -221,8 +225,96 @@ function isMockStandings(drivers: Driver[]): boolean {
   return Boolean(ver && ver.points >= 300);
 }
 
+function scoringSessionsCompleted(sessions: any[]): any[] {
+  const now = Date.now();
+  return sessions.filter((s) => {
+    if (s.session_name !== 'Race' && s.session_name !== 'Sprint') return false;
+    if (!s.date_end) return false;
+    return new Date(s.date_end).getTime() < now;
+  });
+}
+
+function standingsLookValid(drivers: Driver[], completedRaceCount: number): boolean {
+  if (!drivers.length || isMockStandings(drivers)) return false;
+  const total = drivers.reduce((sum, d) => sum + d.points, 0);
+  // Before the first race, all-zero standings are expected.
+  if (completedRaceCount === 0) return true;
+  return total > 0;
+}
+
+function parsePoints(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function fetchScoringDataForSessions(
+  raceSessions: any[],
+): Promise<{ results: any[]; rosterRaw: any[] }> {
+  if (raceSessions.length === 0) {
+    return { results: [], rosterRaw: [] };
+  }
+
+  // Prefer one bulk request (fastest when it works).
+  const keysParam = raceSessions.map((s: any) => `session_key=${s.session_key}`).join('&');
+  try {
+    const [rRes, rDrv] = await Promise.all([
+      fetchT(`${OPENF1_URL}/session_result?${keysParam}`, 45000),
+      fetchT(`${OPENF1_URL}/drivers?${keysParam}`, 45000),
+    ]);
+    if (rRes.ok && rDrv.ok) {
+      const results = await rRes.json();
+      const rosterRaw = await rDrv.json();
+      if (Array.isArray(results) && results.length > 0) {
+        return {
+          results,
+          rosterRaw: Array.isArray(rosterRaw) ? rosterRaw : [],
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('[Standings] bulk OpenF1 fetch failed, falling back to chunks', e);
+  }
+
+  // Chunked fallback for slow/mobile networks.
+  const results: any[] = [];
+  const rosterRaw: any[] = [];
+  const CHUNK = 6;
+  let failedChunks = 0;
+
+  for (let i = 0; i < raceSessions.length; i += CHUNK) {
+    const chunk = raceSessions.slice(i, i + CHUNK);
+    const chunkKeys = chunk.map((s: any) => `session_key=${s.session_key}`).join('&');
+    try {
+      const [rRes, rDrv] = await Promise.all([
+        fetchT(`${OPENF1_URL}/session_result?${chunkKeys}`, 30000),
+        fetchT(`${OPENF1_URL}/drivers?${chunkKeys}`, 30000),
+      ]);
+      if (!rRes.ok || !rDrv.ok) {
+        failedChunks += 1;
+        continue;
+      }
+      const chunkResults = await rRes.json();
+      const chunkRoster = await rDrv.json();
+      if (Array.isArray(chunkResults)) results.push(...chunkResults);
+      if (Array.isArray(chunkRoster)) rosterRaw.push(...chunkRoster);
+    } catch {
+      failedChunks += 1;
+    }
+  }
+
+  if (failedChunks > 0) {
+    console.warn(`[Standings] ${failedChunks} OpenF1 chunk(s) failed`);
+  }
+
+  return { results, rosterRaw };
+}
+
 // Returns fully-ranked drivers and constructors for the current season.
-async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors: Constructor[] }> {
+async function fetchOpenF1Standings(): Promise<{
+  drivers: Driver[];
+  constructors: Constructor[];
+  completedRaceCount: number;
+}> {
   const picked = await pickStandingsYear();
   if (!picked) throw new Error('No OpenF1 season with completed races available');
 
@@ -236,28 +328,16 @@ async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors
   //    roster for that specific session. This lets us credit constructor
   //    points to the team a driver was driving for at the time of the
   //    race, not the team they're on today.
-  const raceSessions = picked.sessions.filter((s: any) =>
-    s.session_name === 'Race' || s.session_name === 'Sprint'
-  );
+  const raceSessions = scoringSessionsCompleted(picked.sessions);
 
   if (raceSessions.length === 0) {
-    throw new Error('No scoring sessions for standings');
+    throw new Error('No completed scoring sessions for standings');
   }
 
-  // Chunk bulk fetches — one huge URL can time out on slow/mobile networks.
-  const CHUNK = 8;
-  const results: any[] = [];
-  const rosterRaw: any[] = [];
+  const { results, rosterRaw } = await fetchScoringDataForSessions(raceSessions);
 
-  for (let i = 0; i < raceSessions.length; i += CHUNK) {
-    const chunk = raceSessions.slice(i, i + CHUNK);
-    const keysParam = chunk.map((s: any) => `session_key=${s.session_key}`).join('&');
-    const [rRes, rDrv] = await Promise.all([
-      fetchT(`${OPENF1_URL}/session_result?${keysParam}`, 30000),
-      fetchT(`${OPENF1_URL}/drivers?${keysParam}`, 30000),
-    ]);
-    if (rRes.ok) results.push(...(await rRes.json()));
-    if (rDrv.ok) rosterRaw.push(...(await rDrv.json()));
+  if (results.length === 0) {
+    throw new Error('OpenF1 returned no session results for completed races');
   }
 
   const rosterBySession = new Map<number, Map<number, any>>();
@@ -273,7 +353,7 @@ async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors
 
   for (const row of results) {
     if (!row || typeof row.driver_number !== 'number') continue;
-    const pts = typeof row.points === 'number' ? row.points : 0;
+    const pts = parsePoints(row.points);
 
     pointsByDriver.set(
       row.driver_number,
@@ -308,6 +388,11 @@ async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors
     .sort((a, b) => b.points - a.points)
     .map((d, i) => ({ ...d, pos: i + 1 }));
 
+  const totalPoints = drivers.reduce((sum, d) => sum + d.points, 0);
+  if (totalPoints === 0) {
+    throw new Error('OpenF1 standings summed to zero despite completed races');
+  }
+
   // 4. Constructors: ranked by points summed PER-SESSION from the driver
   //    lineup at that race, so mid-season swaps are credited correctly.
   const constructors: Constructor[] = Array.from(pointsByTeam.entries())
@@ -315,7 +400,7 @@ async function fetchOpenF1Standings(): Promise<{ drivers: Driver[]; constructors
     .sort((a, b) => b.points - a.points)
     .map((c, i) => ({ ...c, pos: i + 1 }));
 
-  return { drivers, constructors };
+  return { drivers, constructors, completedRaceCount: raceSessions.length };
 }
 
 const DRIVER_NUMBERS: Record<string, number> = {
@@ -376,13 +461,14 @@ async function fetchConstructorsFromSupabase(): Promise<Constructor[] | null> {
 }
 
 const STANDINGS_CACHE_TTL = 10 * 60 * 1000; // 10 min
-const STANDINGS_CACHE_KEY = 'f1_championship_standings_v9';
+const STANDINGS_CACHE_KEY = 'f1_championship_standings_v10';
 
 type CachedStandings = {
   drivers: Driver[];
   constructors: Constructor[];
   source: 'openf1' | 'supabase';
   timestamp: number;
+  completedRaceCount: number;
 };
 
 async function fetchChampionshipStandings(): Promise<{
@@ -397,11 +483,14 @@ async function fetchChampionshipStandings(): Promise<{
       if (
         cached.source === 'openf1' &&
         Date.now() - cached.timestamp < STANDINGS_CACHE_TTL &&
-        cached.drivers?.length &&
-        !isMockStandings(cached.drivers)
+        standingsLookValid(cached.drivers, cached.completedRaceCount ?? 1)
       ) {
         console.log('[Standings] Serving cached OpenF1 standings');
         return { drivers: cached.drivers, constructors: cached.constructors };
+      }
+      if (cached.source === 'openf1') {
+        console.warn('[Standings] Ignoring invalid cached standings (stale or all-zero)');
+        localStorage.removeItem(STANDINGS_CACHE_KEY);
       }
     }
   } catch (e) {
@@ -417,7 +506,7 @@ async function fetchChampionshipStandings(): Promise<{
   const liveDrivers = live?.drivers ?? [];
   const liveConstructors = live?.constructors ?? [];
 
-  if (liveDrivers.length && !isMockStandings(liveDrivers)) {
+  if (liveDrivers.length && standingsLookValid(liveDrivers, live?.completedRaceCount ?? 1)) {
     console.log('[Standings] Using live OpenF1');
     const payload: CachedStandings = {
       drivers: liveDrivers,
@@ -426,6 +515,7 @@ async function fetchChampionshipStandings(): Promise<{
         : (fromDbConstructors ?? []),
       source: 'openf1',
       timestamp: Date.now(),
+      completedRaceCount: live?.completedRaceCount ?? 1,
     };
     try {
       localStorage.setItem(STANDINGS_CACHE_KEY, JSON.stringify(payload));
