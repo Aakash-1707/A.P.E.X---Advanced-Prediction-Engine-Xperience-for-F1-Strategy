@@ -247,63 +247,31 @@ function parsePoints(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** One request per completed session — reliable in the browser (bulk URLs often fail). */
 async function fetchScoringDataForSessions(
   raceSessions: any[],
 ): Promise<{ results: any[]; rosterRaw: any[] }> {
-  if (raceSessions.length === 0) {
-    return { results: [], rosterRaw: [] };
-  }
-
-  // Prefer one bulk request (fastest when it works).
-  const keysParam = raceSessions.map((s: any) => `session_key=${s.session_key}`).join('&');
-  try {
-    const [rRes, rDrv] = await Promise.all([
-      fetchT(`${OPENF1_URL}/session_result?${keysParam}`, 45000),
-      fetchT(`${OPENF1_URL}/drivers?${keysParam}`, 45000),
-    ]);
-    if (rRes.ok && rDrv.ok) {
-      const results = await rRes.json();
-      const rosterRaw = await rDrv.json();
-      if (Array.isArray(results) && results.length > 0) {
-        return {
-          results,
-          rosterRaw: Array.isArray(rosterRaw) ? rosterRaw : [],
-        };
-      }
-    }
-  } catch (e) {
-    console.warn('[Standings] bulk OpenF1 fetch failed, falling back to chunks', e);
-  }
-
-  // Chunked fallback for slow/mobile networks.
   const results: any[] = [];
   const rosterRaw: any[] = [];
-  const CHUNK = 6;
-  let failedChunks = 0;
 
-  for (let i = 0; i < raceSessions.length; i += CHUNK) {
-    const chunk = raceSessions.slice(i, i + CHUNK);
-    const chunkKeys = chunk.map((s: any) => `session_key=${s.session_key}`).join('&');
+  for (const session of raceSessions) {
+    const sk = session.session_key;
     try {
       const [rRes, rDrv] = await Promise.all([
-        fetchT(`${OPENF1_URL}/session_result?${chunkKeys}`, 30000),
-        fetchT(`${OPENF1_URL}/drivers?${chunkKeys}`, 30000),
+        fetchT(`${OPENF1_URL}/session_result?session_key=${sk}`, 20000),
+        fetchT(`${OPENF1_URL}/drivers?session_key=${sk}`, 20000),
       ]);
-      if (!rRes.ok || !rDrv.ok) {
-        failedChunks += 1;
-        continue;
+      if (rRes.ok) {
+        const rows = await rRes.json();
+        if (Array.isArray(rows)) results.push(...rows);
       }
-      const chunkResults = await rRes.json();
-      const chunkRoster = await rDrv.json();
-      if (Array.isArray(chunkResults)) results.push(...chunkResults);
-      if (Array.isArray(chunkRoster)) rosterRaw.push(...chunkRoster);
-    } catch {
-      failedChunks += 1;
+      if (rDrv.ok) {
+        const rows = await rDrv.json();
+        if (Array.isArray(rows)) rosterRaw.push(...rows);
+      }
+    } catch (e) {
+      console.warn(`[Standings] session ${sk} (${session.session_name}) failed:`, e);
     }
-  }
-
-  if (failedChunks > 0) {
-    console.warn(`[Standings] ${failedChunks} OpenF1 chunk(s) failed`);
   }
 
   return { results, rosterRaw };
@@ -352,16 +320,17 @@ async function fetchOpenF1Standings(): Promise<{
   const pointsByTeam = new Map<string, { points: number; color: string }>();
 
   for (const row of results) {
-    if (!row || typeof row.driver_number !== 'number') continue;
+    const driverNumber = Number(row?.driver_number);
+    if (!Number.isFinite(driverNumber)) continue;
     const pts = parsePoints(row.points);
 
     pointsByDriver.set(
-      row.driver_number,
-      (pointsByDriver.get(row.driver_number) || 0) + pts
+      driverNumber,
+      (pointsByDriver.get(driverNumber) || 0) + pts
     );
 
     const sessionRoster = rosterBySession.get(row.session_key);
-    const drv = sessionRoster?.get(row.driver_number);
+    const drv = sessionRoster?.get(driverNumber);
     const team = drv?.team_name;
     if (team) {
       const color = drv.team_colour
@@ -460,43 +429,33 @@ async function fetchConstructorsFromSupabase(): Promise<Constructor[] | null> {
   return mapSupabaseConstructors(data);
 }
 
-const STANDINGS_CACHE_TTL = 10 * 60 * 1000; // 10 min
-const STANDINGS_CACHE_KEY = 'f1_championship_standings_v10';
+const STANDINGS_MEMORY_TTL = 5 * 60 * 1000; // 5 min in-memory only — never localStorage
 
-type CachedStandings = {
+// Drop poisoned caches from earlier builds.
+const LEGACY_STANDINGS_KEYS = [
+  'f1_championship_standings_v7',
+  'f1_championship_standings_v8',
+  'f1_championship_standings_v9',
+  'f1_championship_standings_v10',
+];
+try {
+  for (const key of LEGACY_STANDINGS_KEYS) localStorage.removeItem(key);
+} catch { /* private browsing */ }
+
+type StandingsPayload = {
   drivers: Driver[];
   constructors: Constructor[];
-  source: 'openf1' | 'supabase';
-  timestamp: number;
-  completedRaceCount: number;
+  source: 'openf1' | 'supabase' | 'mock';
 };
 
-async function fetchChampionshipStandings(): Promise<{
-  drivers: Driver[];
-  constructors: Constructor[];
-}> {
-  // Only reuse cache when it came from a successful OpenF1 fetch.
-  try {
-    const hit = localStorage.getItem(STANDINGS_CACHE_KEY);
-    if (hit) {
-      const cached: CachedStandings = JSON.parse(hit);
-      if (
-        cached.source === 'openf1' &&
-        Date.now() - cached.timestamp < STANDINGS_CACHE_TTL &&
-        standingsLookValid(cached.drivers, cached.completedRaceCount ?? 1)
-      ) {
-        console.log('[Standings] Serving cached OpenF1 standings');
-        return { drivers: cached.drivers, constructors: cached.constructors };
-      }
-      if (cached.source === 'openf1') {
-        console.warn('[Standings] Ignoring invalid cached standings (stale or all-zero)');
-        localStorage.removeItem(STANDINGS_CACHE_KEY);
-      }
-    }
-  } catch (e) {
-    console.warn('[Standings] cache read error', e);
-  }
+let standingsMemoryCache: { data: StandingsPayload; expires: number } | null = null;
+let standingsInflight: Promise<StandingsPayload> | null = null;
 
+function totalPoints(drivers: Driver[]): number {
+  return drivers.reduce((sum, d) => sum + d.points, 0);
+}
+
+async function fetchChampionshipStandingsFresh(): Promise<StandingsPayload> {
   const [fromDbDrivers, fromDbConstructors, live] = await Promise.all([
     fetchDriversFromSupabase(),
     fetchConstructorsFromSupabase(),
@@ -505,37 +464,80 @@ async function fetchChampionshipStandings(): Promise<{
 
   const liveDrivers = live?.drivers ?? [];
   const liveConstructors = live?.constructors ?? [];
+  const openf1Valid =
+    liveDrivers.length > 0 &&
+    standingsLookValid(liveDrivers, live?.completedRaceCount ?? 0);
 
-  if (liveDrivers.length && standingsLookValid(liveDrivers, live?.completedRaceCount ?? 1)) {
-    console.log('[Standings] Using live OpenF1');
-    const payload: CachedStandings = {
-      drivers: liveDrivers,
-      constructors: liveConstructors.length
-        ? liveConstructors
-        : (fromDbConstructors ?? []),
-      source: 'openf1',
-      timestamp: Date.now(),
-      completedRaceCount: live?.completedRaceCount ?? 1,
-    };
-    try {
-      localStorage.setItem(STANDINGS_CACHE_KEY, JSON.stringify(payload));
-    } catch (e) {
-      console.warn('[Standings] cache write error', e);
+  const supabaseValid =
+    Boolean(fromDbDrivers?.length && fromDbConstructors?.length) &&
+    standingsLookValid(fromDbDrivers!, 1);
+
+  if (openf1Valid && supabaseValid) {
+    // Prefer whichever source has more total points (fresher after a race weekend).
+    const useOpenF1 = totalPoints(liveDrivers) >= totalPoints(fromDbDrivers!);
+    if (useOpenF1) {
+      console.log('[Standings] Using live OpenF1');
+      return {
+        drivers: liveDrivers,
+        constructors: liveConstructors.length ? liveConstructors : fromDbConstructors!,
+        source: 'openf1',
+      };
     }
-    return { drivers: payload.drivers, constructors: payload.constructors };
+    console.log('[Standings] Using Supabase (points >= OpenF1)');
+    return { drivers: fromDbDrivers!, constructors: fromDbConstructors!, source: 'supabase' };
   }
 
-  if (fromDbDrivers?.length && fromDbConstructors?.length) {
-    console.warn('[Standings] OpenF1 unavailable — using Supabase (run sync_standings workflow to refresh)');
-    return { drivers: fromDbDrivers, constructors: fromDbConstructors };
+  if (openf1Valid) {
+    console.log('[Standings] Using live OpenF1');
+    return {
+      drivers: liveDrivers,
+      constructors: liveConstructors.length ? liveConstructors : (fromDbConstructors ?? []),
+      source: 'openf1',
+    };
   }
 
-  // Last resort: mock data (should be rare).
-  console.warn('[Standings] Using mock fallback — check network / OpenF1 availability');
+  if (supabaseValid) {
+    console.warn('[Standings] OpenF1 unavailable — using Supabase');
+    return { drivers: fromDbDrivers!, constructors: fromDbConstructors!, source: 'supabase' };
+  }
+
+  console.warn('[Standings] Using mock fallback — check network / run sync_standings');
   return {
     drivers: mockDrivers,
     constructors: mockConstructors.map((c) => ({ ...c, color: resolveDriverColor(c.name) })),
+    source: 'mock',
   };
+}
+
+async function fetchChampionshipStandings(): Promise<{
+  drivers: Driver[];
+  constructors: Constructor[];
+}> {
+  if (standingsMemoryCache && Date.now() < standingsMemoryCache.expires) {
+    return standingsMemoryCache.data;
+  }
+
+  if (!standingsInflight) {
+    standingsInflight = fetchChampionshipStandingsFresh()
+      .then((data) => {
+        // Only cache successful live OpenF1 reads (never cache mock or fragile fallbacks).
+        if (data.source === 'openf1' && standingsLookValid(data.drivers, 1)) {
+          standingsMemoryCache = {
+            data,
+            expires: Date.now() + STANDINGS_MEMORY_TTL,
+          };
+        } else {
+          standingsMemoryCache = null;
+        }
+        return data;
+      })
+      .finally(() => {
+        standingsInflight = null;
+      });
+  }
+
+  const { drivers, constructors } = await standingsInflight;
+  return { drivers, constructors };
 }
 
 export async function fetchAllDrivers(): Promise<Driver[]> {
@@ -544,7 +546,7 @@ export async function fetchAllDrivers(): Promise<Driver[]> {
 }
 
 export async function fetchDriversChampionship(): Promise<Driver[]> {
-  const drivers = await fetchAllDrivers();
+  const { drivers } = await fetchChampionshipStandings();
   return drivers.slice(0, 3);
 }
 
@@ -554,7 +556,7 @@ export async function fetchAllConstructors(): Promise<Constructor[]> {
 }
 
 export async function fetchConstructorsChampionship(): Promise<Constructor[]> {
-  const constructors = await fetchAllConstructors();
+  const { constructors } = await fetchChampionshipStandings();
   return constructors.slice(0, 3);
 }
 
