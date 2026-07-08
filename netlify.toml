@@ -7,6 +7,11 @@
   node_bundler = "esbuild"
 
 [[redirects]]
+  from = "/api/standings"
+  to = "/.netlify/functions/standings"
+  status = 200
+
+[[redirects]]
   from = "/api/groq/chat"
   to = "/.netlify/functions/groq-chat"
   status = 200

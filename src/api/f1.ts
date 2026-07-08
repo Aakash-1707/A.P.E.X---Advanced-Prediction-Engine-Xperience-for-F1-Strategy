@@ -247,34 +247,60 @@ function parsePoints(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** One request per completed session — reliable in the browser (bulk URLs often fail). */
+async function fetchStandingsFromServer(): Promise<StandingsPayload | null> {
+  try {
+    const res = await fetchT('/api/standings', 15000);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data?.drivers) || data.drivers.length === 0) return null;
+
+    const drivers: Driver[] = data.drivers.map((d: Driver) => ({
+      ...d,
+      image: resolveDriverImage(d.abbr),
+    }));
+
+    if (!standingsLookValid(drivers, data.completedRaceCount ?? 1)) return null;
+
+    const constructors: Constructor[] = (data.constructors ?? []).map((c: Constructor) => ({
+      ...c,
+      color: c.color || resolveDriverColor(c.name),
+    }));
+
+    console.log('[Standings] Using server API (/api/standings)');
+    return { drivers, constructors, source: 'openf1' };
+  } catch (e) {
+    console.warn('[Standings] Server API failed:', e);
+    return null;
+  }
+}
+
+/** Bulk fetch fallback for local dev when /api/standings is unavailable. */
 async function fetchScoringDataForSessions(
   raceSessions: any[],
 ): Promise<{ results: any[]; rosterRaw: any[] }> {
-  const results: any[] = [];
-  const rosterRaw: any[] = [];
+  if (raceSessions.length === 0) return { results: [], rosterRaw: [] };
 
-  for (const session of raceSessions) {
-    const sk = session.session_key;
-    try {
-      const [rRes, rDrv] = await Promise.all([
-        fetchT(`${OPENF1_URL}/session_result?session_key=${sk}`, 20000),
-        fetchT(`${OPENF1_URL}/drivers?session_key=${sk}`, 20000),
-      ]);
-      if (rRes.ok) {
-        const rows = await rRes.json();
-        if (Array.isArray(rows)) results.push(...rows);
+  const keysParam = raceSessions.map((s: any) => `session_key=${s.session_key}`).join('&');
+  try {
+    const [rRes, rDrv] = await Promise.all([
+      fetchT(`${OPENF1_URL}/session_result?${keysParam}`, 30000),
+      fetchT(`${OPENF1_URL}/drivers?${keysParam}`, 30000),
+    ]);
+    if (rRes.ok && rDrv.ok) {
+      const results = await rRes.json();
+      const rosterRaw = await rDrv.json();
+      if (Array.isArray(results) && results.length > 0) {
+        return {
+          results,
+          rosterRaw: Array.isArray(rosterRaw) ? rosterRaw : [],
+        };
       }
-      if (rDrv.ok) {
-        const rows = await rDrv.json();
-        if (Array.isArray(rows)) rosterRaw.push(...rows);
-      }
-    } catch (e) {
-      console.warn(`[Standings] session ${sk} (${session.session_name}) failed:`, e);
     }
+  } catch (e) {
+    console.warn('[Standings] bulk OpenF1 fallback failed', e);
   }
 
-  return { results, rosterRaw };
+  return { results: [], rosterRaw: [] };
 }
 
 // Returns fully-ranked drivers and constructors for the current season.
@@ -451,16 +477,19 @@ type StandingsPayload = {
 let standingsMemoryCache: { data: StandingsPayload; expires: number } | null = null;
 let standingsInflight: Promise<StandingsPayload> | null = null;
 
-function totalPoints(drivers: Driver[]): number {
-  return drivers.reduce((sum, d) => sum + d.points, 0);
-}
-
 async function fetchChampionshipStandingsFresh(): Promise<StandingsPayload> {
-  const [fromDbDrivers, fromDbConstructors, live] = await Promise.all([
+  const [fromServer, fromDbDrivers, fromDbConstructors, live] = await Promise.all([
+    fetchStandingsFromServer(),
     fetchDriversFromSupabase(),
     fetchConstructorsFromSupabase(),
     fetchOpenF1StandingsWithRetry(),
   ]);
+
+  if (fromServer) return fromServer;
+
+  const supabaseValid =
+    Boolean(fromDbDrivers?.length && fromDbConstructors?.length) &&
+    standingsLookValid(fromDbDrivers!, 1);
 
   const liveDrivers = live?.drivers ?? [];
   const liveConstructors = live?.constructors ?? [];
@@ -468,27 +497,8 @@ async function fetchChampionshipStandingsFresh(): Promise<StandingsPayload> {
     liveDrivers.length > 0 &&
     standingsLookValid(liveDrivers, live?.completedRaceCount ?? 0);
 
-  const supabaseValid =
-    Boolean(fromDbDrivers?.length && fromDbConstructors?.length) &&
-    standingsLookValid(fromDbDrivers!, 1);
-
-  if (openf1Valid && supabaseValid) {
-    // Prefer whichever source has more total points (fresher after a race weekend).
-    const useOpenF1 = totalPoints(liveDrivers) >= totalPoints(fromDbDrivers!);
-    if (useOpenF1) {
-      console.log('[Standings] Using live OpenF1');
-      return {
-        drivers: liveDrivers,
-        constructors: liveConstructors.length ? liveConstructors : fromDbConstructors!,
-        source: 'openf1',
-      };
-    }
-    console.log('[Standings] Using Supabase (points >= OpenF1)');
-    return { drivers: fromDbDrivers!, constructors: fromDbConstructors!, source: 'supabase' };
-  }
-
   if (openf1Valid) {
-    console.log('[Standings] Using live OpenF1');
+    console.log('[Standings] Using live OpenF1 (client fallback)');
     return {
       drivers: liveDrivers,
       constructors: liveConstructors.length ? liveConstructors : (fromDbConstructors ?? []),
@@ -497,11 +507,11 @@ async function fetchChampionshipStandingsFresh(): Promise<StandingsPayload> {
   }
 
   if (supabaseValid) {
-    console.warn('[Standings] OpenF1 unavailable — using Supabase');
+    console.warn('[Standings] Using Supabase');
     return { drivers: fromDbDrivers!, constructors: fromDbConstructors!, source: 'supabase' };
   }
 
-  console.warn('[Standings] Using mock fallback — check network / run sync_standings');
+  console.warn('[Standings] Using mock fallback — run sync_standings workflow');
   return {
     drivers: mockDrivers,
     constructors: mockConstructors.map((c) => ({ ...c, color: resolveDriverColor(c.name) })),
